@@ -154,10 +154,9 @@ struct BlockRow: View {
             .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
 
         case .assistant:
-            Text(block.text)
-                .textSelection(.enabled)
+            // Agent 正文按 markdown 渲染：代码块、列表、标题、表格等
+            MarkdownView(text: block.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
 
         case .tool:
             DisclosureGroup(isExpanded: $expanded) {
