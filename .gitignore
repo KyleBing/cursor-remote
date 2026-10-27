@@ -5,6 +5,7 @@ server/bin/
 ios/CursorRemote.xcodeproj/
 # 本地构建缓存
 ios/build/
+ios/build-sim/
 DerivedData/
 .DS_Store
 server/server

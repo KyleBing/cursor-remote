@@ -103,7 +103,7 @@ App 首次打开时填 `https://kylebing.cn/cursor-remote` 和 token 即可（�
 | 字段 | 说明 |
 | --- | --- |
 | `port` | 监听端口，默认 8787 |
-| `token` | Bearer token，首次启动自动生成 |
+| `token` | Bearer token，首次启动自动生成（32 字节随机，64 位 hex）；改完重启服务即轮换 |
 | `agentPath` | agent CLI 路径，自动探测 |
 | `projects` | **项目白名单**，只有这里面的目录能被远程执行 |
 | `defaultApproval` | `auto-review` / `default` / `force` |
@@ -137,6 +137,23 @@ SSE 帧：`event: task`（元信息）、`event: event`（一条事件）、`eve
 - **目录**：请求里的项目必须命中白名单，防止远程执行任意路径。
 - **审批**：默认 `--auto-review`，由服务端分类器放行安全命令、其余暂停；`--force` 需配置里显式打开 `allowForce`。
 - **流量**：事件的 `raw` 字段只落盘用于复盘，不推给客户端（实测省 70% 流量）。
+
+### token 怎么来、怎么换
+
+| 事项 | 说明 |
+| --- | --- |
+| 生成 | 首次启动（`~/.cursor-remote/config.json` 不存在）或配置里 `token` 为空时，自动生成 32 字节随机串（64 位 hex）并写回配置 |
+| 查看 | 启动横幅里的 `Token:` 一行；或 `server/bin/cursor-remote -print-token`；或直接看 `~/.cursor-remote/config.json` 的 `token` 字段（权限 0600） |
+| 轮换 | 改 `config.json` 的 `token` → 重启服务（LaunchAgent：`launchctl kickstart -k gui/$(id -u)/cn.kylebing.cursorremote`）→ 所有设备重新填新 token |
+
+### 多人使用：目前不支持
+
+服务端是**单实例、单 token**：一个 token 就是全权凭据，能访问白名单里的所有项目、读写所有任务（含中断别人发起的任务）。任务没有记录发起者，也没有按人隔离的项目列表。
+
+多台设备填同一个 token 是可以的，但那是「同一个人多台设备」，不是多人分权。真要给同事用，只有两条路：
+
+1. 每人自己的 Mac 上各跑一套（各自的 `~/.cursor-remote/config.json`、白名单、token、隧道）；
+2. 改造服务端：`token → 用户` 映射、任务记录 `owner`、按用户过滤列表与详情/SSE、白名单按用户分组——目前都还没做。
 
 ## 网络通路（家 → 公司）
 
