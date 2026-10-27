@@ -20,6 +20,14 @@ struct ProjectInfo: Codable, Identifiable, Hashable {
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
     }
+
+    /// 骨架占位（加载中列表用，配合 .redacted 显示灰条）
+    static let placeholder = ProjectInfo(
+        name: "加载中的项目",
+        path: "/Users/you/Developer/project",
+        sessions: 0,
+        lastActive: 0
+    )
 }
 
 /// 任务元信息
@@ -54,6 +62,14 @@ struct TaskInfo: Codable, Identifiable, Hashable {
         if seconds < 60 { return String(format: "%.0fs", seconds) }
         return String(format: "%.0f分%.0f秒", seconds / 60, seconds.truncatingRemainder(dividingBy: 60))
     }
+
+    /// 骨架占位（加载中列表用，配合 .redacted 显示灰条）
+    static let placeholder = TaskInfo(
+        id: "placeholder", project: "加载中", projectPath: "/Users/you/Developer/project",
+        prompt: "正在拉取任务列表，请稍候", mode: "agent", model: nil, approval: "auto-review",
+        sessionID: nil, status: "queued", createdAt: 0, startedAt: nil, endedAt: nil,
+        exitCode: nil, result: nil, error: nil
+    )
 }
 
 /// 一条对话事件
@@ -93,6 +109,11 @@ struct Health: Codable {
     let loggedIn: Bool?
     let detail: String?
     let projects: Int?
+
+    /// 骨架占位（加载中状态行用，配合 .redacted 显示灰条）
+    static let placeholder = Health(
+        ok: true, agentPath: nil, version: "0.0.0", loggedIn: true, detail: nil, projects: 0
+    )
 }
 
 /// 接口错误

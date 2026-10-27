@@ -11,6 +11,12 @@ struct ProjectsView: View {
             List {
                 if let health = model.health {
                     Section { ServerStatusRow(health: health) }
+                } else if model.isLoading {
+                    // 健康状态还没回来时占位，避免这一节突然出现把列表顶下去
+                    Section {
+                        ServerStatusRow(health: .placeholder)
+                            .redacted(reason: .placeholder)
+                    }
                 }
 
                 if let error = model.lastError {
@@ -23,8 +29,16 @@ struct ProjectsView: View {
 
                 Section("项目") {
                     if model.projects.isEmpty {
-                        Text(model.isLoading ? "加载中…" : "没有可用项目")
-                            .foregroundStyle(.secondary)
+                        if model.isLoading {
+                            // 骨架占位：切页瞬间不再闪「没有可用项目」
+                            ForEach(0..<3, id: \.self) { _ in
+                                ProjectRow(project: .placeholder)
+                                    .redacted(reason: .placeholder)
+                            }
+                        } else {
+                            Text("没有可用项目")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     ForEach(model.projects) { project in
                         Button {
@@ -38,6 +52,12 @@ struct ProjectsView: View {
             }
             .navigationTitle("远程 Cursor")
             .refreshable { await model.refresh() }
+            // 列表为空时补拉一次，避免只靠手动下拉才有内容
+            .task {
+                if model.projects.isEmpty {
+                    await model.refresh()
+                }
+            }
             .navigationDestination(for: TaskInfo.self) { task in
                 TaskDetailView(task: task)
             }
@@ -60,8 +80,16 @@ struct TasksView: View {
         NavigationStack(path: $path) {
             List {
                 if model.tasks.isEmpty {
-                    Text(model.isLoading ? "加载中…" : "还没有任务")
-                        .foregroundStyle(.secondary)
+                    if model.isLoading {
+                        // 骨架占位，避免首屏先闪一下「还没有任务」
+                        ForEach(0..<3, id: \.self) { _ in
+                            TaskRow(task: .placeholder)
+                                .redacted(reason: .placeholder)
+                        }
+                    } else {
+                        Text("还没有任务")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 ForEach(model.tasks) { task in
                     NavigationLink(value: task) {

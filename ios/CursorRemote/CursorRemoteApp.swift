@@ -22,10 +22,14 @@ struct RootView: View {
         Group {
             if model.isConfigured {
                 MainTabView()
+                    .transition(.opacity)
             } else {
                 SetupView()
+                    .transition(.opacity)
             }
         }
+        // 配置完成时做一次淡入切换，避免整屏硬切造成的跳动感
+        .animation(.easeInOut(duration: 0.25), value: model.isConfigured)
         .task { await model.bootstrap() }
         .onChange(of: scenePhase) { _, phase in
             // 回到前台时刷新一次，避免看到过期数据
@@ -72,7 +76,7 @@ struct SetupView: View {
                 } header: {
                     Text("连接 Mac")
                 } footer: {
-                    Text("在 Mac 上运行 cursor-remote server，启动时会打印访问地址与 token，填到上面即可。两台设备需要在同一个 Tailscale 网络里。")
+                    Text("地址填服务端入口（如 https://kylebing.cn/cursor-remote）。token 在 Mac 上运行 server/bin/cursor-remote -print-token 获取，也可查看 ~/.cursor-remote/config.json。")
                 }
 
                 if let error {

@@ -29,6 +29,7 @@ enum TokenStore {
     static func save(_ token: String) -> Bool {
         // 手动粘贴常带换行/空格，先去掉再存
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        debugLog("save len=\(value.count)")
         guard !value.isEmpty else {
             clear()
             return false
@@ -38,20 +39,32 @@ enum TokenStore {
             log.error("Keychain 写入失败 status=\(status)")
         }
         let backupOK = writeBackup(value)
+        debugLog("save keychain=\(status) backup=\(backupOK)")
         return status == errSecSuccess || backupOK
     }
 
     /// 读取 token：Keychain 优先，读不到时用兜底文件恢复并回写
     static func load() -> String? {
         if let value = Keychain.get(account), !value.isEmpty {
+            debugLog("load 命中 Keychain len=\(value.count)")
             return value
         }
+        debugLog("load Keychain 无值")
         guard let value = readBackup(), !value.isEmpty else {
+            debugLog("load 兜底文件也没有")
             return nil
         }
         log.notice("Keychain 无 token，已从兜底文件恢复")
+        debugLog("load 命中兜底文件 len=\(value.count)")
         _ = Keychain.set(value, for: account)
         return value
+    }
+
+    /// 开发期打到 stderr 的诊断，Release 不输出
+    private static func debugLog(_ msg: String) {
+        #if DEBUG
+        print("[TokenStore] \(msg)")
+        #endif
     }
 
     /// 清除 token（Keychain 与兜底文件一起删）
