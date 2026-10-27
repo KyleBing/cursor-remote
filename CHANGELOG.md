@@ -7,6 +7,7 @@
 
 ### 新增
 
+- **App 图标资源位**：新增 `Assets.xcassets`（AppIcon 单尺寸 1024 版式），`project.yml` 里 `ASSETCATALOG_COMPILER_APPICON_NAME` 设为 `AppIcon`。当前放了一张占位图，直接把 `Assets.xcassets/AppIcon.appiconset/AppIcon.png` 换成正式图标即可。
 - **App 侧 markdown 渲染**：Agent 返回的正文不再按纯文本显示，改为解析后渲染——标题、有序/无序列表（含嵌套）、引用、分隔线、表格，以及行内粗体、斜体、行内代码与可点击链接。
 - 代码块单独排版：等宽字体、横向滚动、语言标签和一键复制；流式输出中未闭合的围栏按「到文末」处理，不会把后半段文字吞成正文。
 - 解析结果按文本内容缓存（最多 12 份），流式追加时已渲染块不再重复解析。
