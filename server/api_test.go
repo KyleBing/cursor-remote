@@ -13,16 +13,16 @@ import (
 )
 
 // stubAgentScript 模拟 agent CLI 的 stream-json 输出，用于端到端验证。
+// 用 printf 逐行输出，避免 heredoc 依赖临时文件（受限环境下会失败）。
 const stubAgentScript = `#!/bin/bash
-cat <<'EOF'
-{"type":"system","subtype":"init","model":"stub-model","cwd":"/tmp","session_id":"sess-1","permissionMode":"default"}
-{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"session_id":"sess-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"你"}]},"session_id":"sess-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"}]},"session_id":"sess-1"}
-{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":{"shellToolCall":{"args":{"command":"ls -la"}}},"session_id":"sess-1"}
-{"type":"tool_call","subtype":"completed","call_id":"c1","tool_call":{"shellToolCall":{"args":{"command":"ls -la"}}},"session_id":"sess-1"}
-{"type":"result","subtype":"success","duration_ms":1234,"is_error":false,"result":"你好","session_id":"sess-1"}
-EOF
+printf '%s\n' \
+  '{"type":"system","subtype":"init","model":"stub-model","cwd":"/tmp","session_id":"sess-1","permissionMode":"default"}' \
+  '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"session_id":"sess-1"}' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"你"}]},"session_id":"sess-1"}' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"好"}]},"session_id":"sess-1"}' \
+  '{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":{"shellToolCall":{"args":{"command":"ls -la"}}},"session_id":"sess-1"}' \
+  '{"type":"tool_call","subtype":"completed","call_id":"c1","tool_call":{"shellToolCall":{"args":{"command":"ls -la"}}},"session_id":"sess-1"}' \
+  '{"type":"result","subtype":"success","duration_ms":1234,"is_error":false,"result":"你好","session_id":"sess-1"}'
 `
 
 // newTestServer 构造一个使用临时 HOME 与 stub agent 的服务实例。
@@ -77,10 +77,33 @@ func doReq(t *testing.T, s *Server, method, path, body string) *httptest.Respons
 func TestAuth(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	r := httptest.NewRequest("GET", "/api/projects", nil)
+	// 显式设为非回环地址，模拟公网请求
+	r.RemoteAddr = "203.0.113.9:51234"
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("期望 401，实际 %d", w.Code)
+	}
+}
+
+// TestAuthRejectsQueryTokenFromPublic 公网请求不允许用 ?token= 传凭据。
+func TestAuthRejectsQueryTokenFromPublic(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	r := httptest.NewRequest("GET", "/api/projects?token=test-token", nil)
+	r.RemoteAddr = "203.0.113.9:51234"
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("公网带 ?token= 应被拒绝，实际 %d", w.Code)
+	}
+
+	// 本机回环调试则允许
+	r2 := httptest.NewRequest("GET", "/api/projects?token=test-token", nil)
+	r2.RemoteAddr = "127.0.0.1:51234"
+	w2 := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w2, r2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("本机带 ?token= 应放行，实际 %d", w2.Code)
 	}
 }
 
@@ -177,7 +200,7 @@ func TestHealth(t *testing.T) {
 	}
 	// stub agent 会输出 JSON，因此被视为"已登录"
 	if !h.LoggedIn {
-		t.Fatalf("期望 loggedIn=true，实际 %+v", h)
+		t.Fatalf("期望 loggedIn=true，实际 %+v，原始响应: %s", h, w.Body.String())
 	}
 	if h.Projects != 1 {
 		t.Fatalf("项目数不符: %d", h.Projects)
@@ -216,7 +239,7 @@ func TestStreamSSE(t *testing.T) {
 		t.Fatalf("Content-Type 不符: %s", ct)
 	}
 
-	// 每一帧都应是合法 JSON。
+	// 每一帧都应是合法 JSON，且不该携带 raw（它只用于本地复盘，会放大流量）
 	sc := bufio.NewScanner(strings.NewReader(body))
 	for sc.Scan() {
 		line := sc.Text()
@@ -224,6 +247,9 @@ func TestStreamSSE(t *testing.T) {
 			var v map[string]any
 			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &v); err != nil {
 				t.Fatalf("SSE data 不是合法 JSON: %s", line)
+			}
+			if _, hasRaw := v["raw"]; hasRaw {
+				t.Fatalf("SSE 不应推送 raw 字段: %s", line)
 			}
 		}
 	}

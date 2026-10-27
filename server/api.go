@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -50,14 +51,15 @@ func (s *Server) Routes() http.Handler {
 	return mux
 }
 
-// auth 校验 Bearer token，也允许 ?token= 便于浏览器调试。
+// auth 校验 Bearer token。
+// 同时也接受 ?token=，但仅限本机回环地址，避免公网场景下 token 落进访问日志。
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := ""
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			tok = strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 		}
-		if tok == "" {
+		if tok == "" && isLoopback(r) {
 			tok = r.URL.Query().Get("token")
 		}
 		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.Token)) != 1 {
@@ -66,6 +68,16 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// isLoopback 判断请求是否来自本机。
+func isLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // writeJSON 输出 JSON 响应。
@@ -94,10 +106,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.AgentPath == "" {
 			body["detail"] = "未找到 agent CLI"
 		} else {
-			if out, err := exec.Command(s.cfg.AgentPath, "--version").Output(); err == nil {
+			// 用 CombinedOutput 一并拿到 stderr，便于定位失败原因
+			if out, err := exec.Command(s.cfg.AgentPath, "--version").CombinedOutput(); err == nil {
 				body["version"] = strings.TrimSpace(string(out))
 			} else {
-				body["detail"] = "agent --version 执行失败: " + err.Error()
+				body["detail"] = "agent --version 执行失败: " + err.Error() + " / " + strings.TrimSpace(string(out))
 			}
 			// agent status 未登录时输出 Not logged in。
 			if out, err := exec.Command(s.cfg.AgentPath, "status").CombinedOutput(); err == nil {
@@ -171,7 +184,9 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, t.Detail())
+	detail := t.Detail()
+	stripRaw(&detail)
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // taskByID 从路径里取任务。
@@ -179,14 +194,26 @@ func (s *Server) taskByID(r *http.Request) *Task {
 	return s.mgr.Get(r.PathValue("id"))
 }
 
+// stripRaw 去掉事件里的 raw 字段，减少传输体积。
+func stripRaw(d *TaskDetail) {
+	for i := range d.Events {
+		d.Events[i].Raw = nil
+	}
+}
+
 // handleGetTask 返回任务详情（含全部事件）。
+// 默认剥掉 raw（只用于服务端复盘），?raw=1 可取回完整原始行。
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	t := s.taskByID(r)
 	if t == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "任务不存在"})
 		return
 	}
-	writeJSON(w, http.StatusOK, t.Detail())
+	detail := t.Detail()
+	if r.URL.Query().Get("raw") != "1" {
+		stripRaw(&detail)
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // handleStop 中断任务。
@@ -285,7 +312,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeSSE 输出一条 SSE 帧。
+// Event 里的 raw 只用于本地落盘复盘，推给客户端会让流量成倍放大，这里剥掉。
 func writeSSE(w http.ResponseWriter, f http.Flusher, name string, v any) {
+	if e, ok := v.(Event); ok && e.Raw != nil {
+		e.Raw = nil
+		v = e
+	}
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return
