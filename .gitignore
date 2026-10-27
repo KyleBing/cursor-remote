@@ -1,0 +1,8 @@
+# 编译产物
+server/bin/
+# Xcode 工程由 xcodegen 生成，不入库
+ios/CursorRemote.xcodeproj/
+# 本地构建缓存
+ios/build/
+DerivedData/
+.DS_Store
