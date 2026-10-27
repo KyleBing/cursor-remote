@@ -1,0 +1,23 @@
+# frps —— 运行在 VPS 上
+# 只做 TCP 隧道，TLS 由 nginx 在 443 上终止
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+# 只把隧道端口绑到回环，外部一律通过 nginx 反代进来
+proxyBindAddr = "127.0.0.1"
+
+# 控制通道鉴权，token 必须与 Mac 端 frpc 一致
+auth.method = "token"
+auth.token = "REPLACE_WITH_FRP_TOKEN"
+
+# 只允许隧道出 8787，避免 Mac 被攻陷后拿它转发别的端口
+allowPorts = [
+  { start = 8787, end = 8787 },
+]
+
+# 传输层加密，避免控制通道明文
+transport.tls.force = true
+
+# 日志走 stderr，由 systemd 收集
+log.to = "console"
+log.level = "info"

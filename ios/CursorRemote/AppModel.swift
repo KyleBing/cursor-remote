@@ -7,6 +7,9 @@ final class AppModel {
     private static let urlKey = "cursorremote.baseURL"
     private static let tokenKey = "cursorremote.token"
 
+    // 默认走 VPS 反向隧道：阿里云 nginx 的 /cursor-remote/ 前缀，与 Mac 上的服务同源
+    static let defaultBaseURL = "https://kylebing.cn/cursor-remote"
+
     // 设置页绑定的输入值
     var baseURLText: String
     var tokenText: String
@@ -19,7 +22,8 @@ final class AppModel {
     var lastError: String?
 
     init() {
-        baseURLText = UserDefaults.standard.string(forKey: Self.urlKey) ?? ""
+        // 没存过就用默认地址，省得每次手输
+        baseURLText = UserDefaults.standard.string(forKey: Self.urlKey) ?? Self.defaultBaseURL
         tokenText = Keychain.get(Self.tokenKey) ?? ""
     }
 
@@ -106,7 +110,8 @@ final class AppModel {
         Keychain.delete(Self.tokenKey)
         UserDefaults.standard.removeObject(forKey: Self.urlKey)
         tokenText = ""
-        baseURLText = ""
+        // 退登后回到默认地址，不留下空白输入框
+        baseURLText = Self.defaultBaseURL
         health = nil
         projects = []
         tasks = []

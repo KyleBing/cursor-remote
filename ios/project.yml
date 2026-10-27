@@ -47,7 +47,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # 通过 Tailscale 访问时使用 http，需要放开 ATS
+        # 默认走 https://kylebing.cn/cursor-remote（正规证书，无需例外）；
+        # 保留此开关仅为兼容局域网/Tailscale 的 http 直连回退
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: 需要连接同一局域网内运行 cursor-remote 的 Mac

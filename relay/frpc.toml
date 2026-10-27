@@ -1,0 +1,22 @@
+# frpc —— 运行在 Mac 上
+# 只出站连接 VPS 的 7000，公司网络无需开放任何端口
+serverAddr = "114.116.255.157"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "REPLACE_WITH_FRP_TOKEN"
+
+# 传输层加密
+transport.tls.enable = true
+
+# 断线自动重连，指数退避最长 60 秒
+transport.heartbeatInterval = 30
+transport.heartbeatTimeout = 90
+
+# 把本机 cursor-remote 服务（8787）映射到 VPS 的回环 8787
+[[proxies]]
+name = "cursor-remote"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8787
+remotePort = 8787
