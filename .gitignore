@@ -7,3 +7,4 @@ ios/CursorRemote.xcodeproj/
 ios/build/
 DerivedData/
 .DS_Store
+server/server
