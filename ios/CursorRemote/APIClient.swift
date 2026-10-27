@@ -21,9 +21,15 @@ struct APIClient {
     }()
 
     /// 拼装带鉴权头的请求
-    private func request(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
-        let comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        var req = URLRequest(url: comps?.url ?? baseURL)
+    /// query 必须单独传：appendingPathComponent 会把 "?" 编码成 %3F，直接拼进 path 会丢查询参数
+    private func request(_ path: String, method: String = "GET", body: Data? = nil, query: [URLQueryItem] = []) -> URLRequest {
+        var url = baseURL.appendingPathComponent(path)
+        if !query.isEmpty, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            comps.queryItems = query
+            url = comps.url ?? url
+        }
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        var req = URLRequest(url: comps?.url ?? url)
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
@@ -34,8 +40,8 @@ struct APIClient {
     }
 
     /// 统一发送并解码响应
-    private func send<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil) async throws -> T {
-        let (data, response) = try await Self.session.data(for: request(path, method: method, body: body))
+    private func send<T: Decodable>(_ path: String, method: String = "GET", body: Data? = nil, query: [URLQueryItem] = []) async throws -> T {
+        let (data, response) = try await Self.session.data(for: request(path, method: method, body: body, query: query))
         guard let http = response as? HTTPURLResponse else {
             throw APIError(error: "无响应")
         }
@@ -64,7 +70,8 @@ struct APIClient {
 
     func tasks(limit: Int = 50) async throws -> [TaskInfo] {
         struct Wrapper: Decodable { let tasks: [TaskInfo] }
-        let wrapper: Wrapper = try await send("api/tasks?limit=\(limit)")
+        // limit 走 queryItems，不能拼进 path
+        let wrapper: Wrapper = try await send("api/tasks", query: [URLQueryItem(name: "limit", value: String(limit))])
         return wrapper.tasks
     }
 

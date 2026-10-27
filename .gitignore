@@ -1,4 +1,5 @@
 # 编译产物
+/bin/
 server/bin/
 # Xcode 工程由 xcodegen 生成，不入库
 ios/CursorRemote.xcodeproj/

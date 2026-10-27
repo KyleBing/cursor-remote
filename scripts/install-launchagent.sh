@@ -31,6 +31,8 @@ cat > "$PLIST" <<PLIST_EOF
     <key>ProgramArguments</key>
     <array>
         <string>$ROOT/server/bin/cursor-remote</string>
+        <string>-addr</string>
+        <string>127.0.0.1</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$ROOT/server</string>

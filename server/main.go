@@ -40,6 +40,8 @@ func main() {
 	}
 
 	srv := &http.Server{
+		// 必须显式设置 Addr，否则 ListenAndServe 会退回默认的 :http（80 端口）
+		Addr:              fmt.Sprintf("%s:%d", *addr, cfg.Port),
 		Handler:           NewServer(cfg, mgr).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// 不设 WriteTimeout：SSE 是长连接。
