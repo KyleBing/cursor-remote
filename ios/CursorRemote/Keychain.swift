@@ -5,8 +5,9 @@ import Security
 enum Keychain {
     private static let service = "cn.kylebing.cursorremote"
 
-    /// 写入或更新
-    static func set(_ value: String, for key: String) {
+    /// 写入或更新，返回 OSStatus（errSecSuccess 表示成功）
+    @discardableResult
+    static func set(_ value: String, for key: String) -> OSStatus {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -18,7 +19,7 @@ enum Keychain {
         var attrs = query
         attrs[kSecValueData as String] = data
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attrs as CFDictionary, nil)
+        return SecItemAdd(attrs as CFDictionary, nil)
     }
 
     /// 读取

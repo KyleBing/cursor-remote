@@ -15,6 +15,11 @@
 ### 变更
 
 - `server/server` 编译产物不再入库（`.gitignore` 补规则），避免 `go build` 每次都把 9 MB 二进制改成工作区改动。
+- App 的 token 持久化改为「Keychain 主存储 + 容器文件兜底」（`TokenStore`）：Keychain 读写失败不再静默丢弃，读不到时从 `Application Support/token` 恢复并回写；保存失败会在设置页提示。token 入库前去除首尾空白与换行。
+
+### 修复
+
+- App 重启后 token 丢失、要重新填写（旧代码忽略 `SecItemAdd/CopyMatching` 的状态码，钥匙串失效时无感知）。
 
 ## [1.0.0] - 2026-10-27
 

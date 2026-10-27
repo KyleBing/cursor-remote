@@ -5,7 +5,6 @@ import Observation
 @Observable
 final class AppModel {
     private static let urlKey = "cursorremote.baseURL"
-    private static let tokenKey = "cursorremote.token"
 
     // 默认走 VPS 反向隧道：阿里云 nginx 的 /cursor-remote/ 前缀，与 Mac 上的服务同源
     static let defaultBaseURL = "https://kylebing.cn/cursor-remote"
@@ -24,7 +23,7 @@ final class AppModel {
     init() {
         // 没存过就用默认地址，省得每次手输
         baseURLText = UserDefaults.standard.string(forKey: Self.urlKey) ?? Self.defaultBaseURL
-        tokenText = Keychain.get(Self.tokenKey) ?? ""
+        tokenText = TokenStore.load() ?? ""
     }
 
     /// 是否已完成初始配置
@@ -54,8 +53,14 @@ final class AppModel {
         }
         baseURLText = url.absoluteString
         UserDefaults.standard.set(baseURLText, forKey: Self.urlKey)
-        Keychain.set(tokenText, for: Self.tokenKey)
+        // token 存 Keychain + 容器兜底文件
+        let tokenSaved = TokenStore.save(tokenText)
         await refresh()
+        // 持久化失败要显式提示，否则重启后 token 又没了却查不到原因
+        if !tokenSaved {
+            let tip = "token 保存失败，请检查钥匙串权限"
+            lastError = lastError.map { "\($0)；\(tip)" } ?? tip
+        }
     }
 
     /// 首次进入时拉一次数据
@@ -107,7 +112,7 @@ final class AppModel {
 
     /// 清空配置（回到设置引导页）
     func signOut() {
-        Keychain.delete(Self.tokenKey)
+        TokenStore.clear()
         UserDefaults.standard.removeObject(forKey: Self.urlKey)
         tokenText = ""
         // 退登后回到默认地址，不留下空白输入框
