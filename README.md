@@ -276,4 +276,9 @@ cursor-remote/
 
 ## License
 
-按仓库内声明为准；若未附 License 文件，使用前请自行与作者确认。
+[Attribution License](LICENSE)（基于 MIT 精神的署名许可）：
+
+- 可自由使用、修改、分发、商用。
+- **衍生项目 / fork / 再分发**须注明原作者 **KyleBing** 与源仓库  
+  `https://github.com/KyleBing/cursor-remote`（写在 LICENSE、README 或关于页即可）。
+- 除此署名外不对衍生项目设其它限制。
