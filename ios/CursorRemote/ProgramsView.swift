@@ -1,36 +1,31 @@
 import SwiftUI
 
-/// 本机页分区，用于顶部导航快速跳转
+/// 本机页分区，用于顶部 4×2 格子导航
 private enum MacSection: String, CaseIterable, Identifiable {
-    case overview, memory, disk, battery, display, network, bluetooth, programs, running
+    // 概览单独；内存+硬盘；电池+显示；其余各自一格
+    case overview, storage, power, network, bluetooth, apps
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .overview: return "概览"
-        case .memory: return "内存"
-        case .disk: return "磁盘"
-        case .battery: return "电池"
-        case .display: return "显示"
+        case .storage: return "存储"
+        case .power: return "电源"
         case .network: return "网络"
         case .bluetooth: return "蓝牙"
-        case .programs: return "受管"
-        case .running: return "运行中"
+        case .apps: return "应用"
         }
     }
 
     var icon: String {
         switch self {
         case .overview: return "laptopcomputer"
-        case .memory: return "memorychip"
-        case .disk: return "internaldrive"
-        case .battery: return "battery.100"
-        case .display: return "sun.max"
+        case .storage: return "internaldrive"
+        case .power: return "battery.100"
         case .network: return "wifi"
         case .bluetooth: return "wave.3.right"
-        case .programs: return "switch.2"
-        case .running: return "app.badge"
+        case .apps: return "app.badge"
         }
     }
 }
@@ -101,40 +96,40 @@ struct ProgramsView: View {
         }
     }
 
-    // MARK: - 顶部分区 Tab（切换整页，不是页内锚点）
+    // MARK: - 顶部分区格子（4 列，点击切换，无横向滚动）
 
     private var sectionTabBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(MacSection.allCases) { section in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            activeSection = section
-                        }
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: section.icon)
-                                .font(.body.weight(.semibold))
-                            Text(section.title)
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .frame(minWidth: 56)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(activeSection == section
-                                    ? Color.accentColor.opacity(0.16)
-                                    : Color.clear)
-                        )
-                        .foregroundStyle(activeSection == section ? Color.accentColor : .secondary)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 4)
+        return LazyVGrid(columns: columns, spacing: 6) {
+            ForEach(MacSection.allCases) { section in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        activeSection = section
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: section.icon)
+                            .font(.body.weight(.semibold))
+                        Text(section.title)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(activeSection == section
+                                ? Color.accentColor.opacity(0.16)
+                                : Color(.tertiarySystemFill))
+                    )
+                    .foregroundStyle(activeSection == section ? Color.accentColor : .secondary)
                 }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -163,21 +158,20 @@ struct ProgramsView: View {
         switch activeSection {
         case .overview:
             overviewPage
-        case .memory:
-            memoryPage
-        case .disk:
-            diskPage
-        case .battery:
-            batteryPage
-        case .display:
+        case .storage:
+            // 内存 + 硬盘
+            memorySection
+            diskSection
+        case .power:
+            // 电池 + 显示
+            batterySection
             displayPage
         case .network:
             networkPage
         case .bluetooth:
             bluetoothPage
-        case .programs:
+        case .apps:
             programsPage
-        case .running:
             runningPage
         }
     }
@@ -186,16 +180,17 @@ struct ProgramsView: View {
     private var overviewPage: some View {
         if let info = model.systemInfo {
             Section {
-                InfoRow(label: "机型", value: "\(info.hardware.modelName) · \(info.hardware.chip)")
-                InfoRow(label: "标识", value: info.hardware.modelIdentifier)
+                // 概览完整显示、可换行，不截断
+                InfoRow(label: "机型", value: "\(info.hardware.modelName) · \(info.hardware.chip)", multiline: true)
+                InfoRow(label: "标识", value: info.hardware.modelIdentifier, multiline: true)
                 if let cores = info.hardware.cores {
-                    InfoRow(label: "核心", value: cores)
+                    InfoRow(label: "核心", value: cores, multiline: true)
                 }
-                InfoRow(label: "内存", value: "\(info.hardware.memoryGB) GB")
-                InfoRow(label: "已开机", value: info.uptimeText)
-                InfoRow(label: "负载", value: info.loadText)
+                InfoRow(label: "内存", value: "\(info.hardware.memoryGB) GB", multiline: true)
+                InfoRow(label: "已开机", value: info.uptimeText, multiline: true)
+                InfoRow(label: "负载", value: info.loadText, multiline: true)
                 if let sn = info.hardware.serialNumber, !sn.isEmpty {
-                    InfoRow(label: "序列号", value: sn)
+                    InfoRow(label: "序列号", value: sn, multiline: true)
                 }
             }
         } else {
@@ -204,7 +199,7 @@ struct ProgramsView: View {
     }
 
     @ViewBuilder
-    private var memoryPage: some View {
+    private var memorySection: some View {
         if let info = model.systemInfo {
             Section {
                 ProgressRow(
@@ -217,14 +212,16 @@ struct ProgramsView: View {
                 if let swapUsed = info.memory.swapUsedBytes, let swapTotal = info.memory.swapTotalBytes, swapTotal > 0 {
                     InfoRow(label: "交换", value: "\(ByteFormat.string(swapUsed)) / \(ByteFormat.string(swapTotal))")
                 }
+            } header: {
+                Text("内存")
             }
-        } else {
+        } else if activeSection == .storage {
             loadingOrEmpty("正在读取内存…")
         }
     }
 
     @ViewBuilder
-    private var diskPage: some View {
+    private var diskSection: some View {
         if let info = model.systemInfo {
             Section {
                 ForEach(info.disks) { disk in
@@ -235,14 +232,14 @@ struct ProgramsView: View {
                         warnAbove: 90
                     )
                 }
+            } header: {
+                Text("硬盘")
             }
-        } else {
-            loadingOrEmpty("正在读取磁盘…")
         }
     }
 
     @ViewBuilder
-    private var batteryPage: some View {
+    private var batterySection: some View {
         if let info = model.systemInfo {
             Section {
                 if info.battery.present {
@@ -257,8 +254,10 @@ struct ProgramsView: View {
                     Text("无电池信息")
                         .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("电池")
             }
-        } else {
+        } else if activeSection == .power {
             loadingOrEmpty("正在读取电池…")
         }
     }
@@ -275,10 +274,12 @@ struct ProgramsView: View {
                         value: String(format: "%.0f nits · 自动%@", nits, model.systemInfo?.display.autoBrightness == true ? "开" : "关")
                     )
                 }
+            } header: {
+                Text("显示")
             } footer: {
                 Text("拖动滑杆即可远程调节 Mac 亮度与音量。")
             }
-        } else {
+        } else if activeSection == .power {
             loadingOrEmpty("正在读取显示与声音…")
         }
     }
@@ -288,10 +289,11 @@ struct ProgramsView: View {
         if let info = model.systemInfo {
             Section {
                 InfoRow(label: "接口", value: info.network.primaryInterface)
-                if let ip = info.network.ipv4 { InfoRow(label: "IPv4", value: ip) }
-                if let gw = info.network.gateway { InfoRow(label: "网关", value: gw) }
+                // IP 类字段高亮，便于一眼复制辨认
+                if let ip = info.network.ipv4 { InfoRow(label: "IPv4", value: ip, highlighted: true) }
+                if let gw = info.network.gateway { InfoRow(label: "网关", value: gw, highlighted: true) }
                 if let dns = info.network.dns, !dns.isEmpty {
-                    InfoRow(label: "DNS", value: dns.joined(separator: ", "))
+                    InfoRow(label: "DNS", value: dns.joined(separator: ", "), highlighted: true, multiline: true)
                 }
                 if let wifi = info.network.wifi, wifi.connected {
                     if let ssid = wifi.ssid, !ssid.isEmpty {
@@ -310,7 +312,7 @@ struct ProgramsView: View {
                     }
                 }
                 if let v6 = info.network.ipv6 {
-                    InfoRow(label: "IPv6", value: v6)
+                    InfoRow(label: "IPv6", value: v6, highlighted: true, multiline: true)
                 }
             }
         } else {
@@ -369,6 +371,8 @@ struct ProgramsView: View {
                     }
                 }
             }
+        } header: {
+            Text("受管")
         } footer: {
             Text("在 ~/.cursor-remote/config.json 的 programs 里配置。默认含 Cursor、frp 隧道、防睡眠。")
         }
@@ -394,6 +398,8 @@ struct ProgramsView: View {
                     }
                 }
             }
+        } header: {
+            Text("运行中")
         } footer: {
             Text("按内存占用从高到低排列；仅前台 GUI 应用。系统关键进程不可关闭。")
         }
@@ -423,13 +429,18 @@ struct ProgramsView: View {
                 Label("亮度", systemImage: "sun.max.fill")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
+                // 百分比与 loading 同宽占位，避免出现/消失时左右跳动
                 Text("\(Int(brightnessSlider.rounded()))%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                if controlBusy {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                }
+                    .opacity(controlBusy ? 0 : 1)
+                    .overlay {
+                        if controlBusy {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
+                    .frame(minWidth: 36, alignment: .trailing)
             }
             Slider(value: $brightnessSlider, in: 0...100, step: 1) { editing in
                 if !editing {
@@ -574,15 +585,24 @@ struct ProgramsView: View {
 private struct InfoRow: View {
     let label: String
     let value: String
+    var highlighted: Bool = false
+    // 完整显示并可换行；value 最多扩到距 label 右侧 40pt
+    var multiline: Bool = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: multiline ? .top : .firstTextBaseline, spacing: 0) {
             Text(label)
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 12)
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 40)
             Text(value)
+                .font(highlighted ? .subheadline.monospaced().weight(.semibold) : .subheadline)
+                .foregroundStyle(highlighted ? Color.accentColor : .primary)
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
+                .lineLimit(multiline ? nil : 1)
+                .fixedSize(horizontal: false, vertical: multiline)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .font(.subheadline)
     }
