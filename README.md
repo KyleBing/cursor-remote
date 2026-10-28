@@ -1,5 +1,8 @@
 # cursor-remote
 
+<img width="2333" height="1600" alt="远程任务" src="https://github.com/user-attachments/assets/9491d7b5-8418-47b3-b97a-86bd2f12bfe9" />
+
+
 用 iPhone / iPad **远程操控公司 Mac 上的 Cursor Agent**：下发指令、看流式输出；顺带查看本机状态（内存/磁盘/电池/网络/蓝牙）、启停白名单程序、调节亮度与音量。
 
 最终验收仍建议回到 Mac 上的 Cursor 里做——远程负责「下达 + 观察」，不负责「点完所有审批」。
