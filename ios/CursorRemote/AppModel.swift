@@ -20,6 +20,12 @@ final class AppModel {
     var health: Health?
     var projects: [ProjectInfo] = []
     var tasks: [TaskInfo] = []
+    /// 白名单受管程序
+    var programs: [ProgramStatus] = []
+    /// 本机正在运行的前台应用
+    var runningApps: [RunningApp] = []
+    /// 本机系统信息（硬件 / 电池 / 网络等）
+    var systemInfo: SystemInfo?
     var isLoading = false
     var lastError: String?
     /// 是否已完成初始配置（持久化标记；输入框里非空不算）
@@ -115,12 +121,14 @@ final class AppModel {
         isLoading = false
     }
 
-    /// 三个接口并发请求但分别落地：
+    /// 多个接口并发请求但分别落地：
     /// 任一接口抖动只影响自己那一块，不会让整页变成空白等用户下拉刷新。
     private func loadAll(client: APIClient) async {
         async let hTask = client.health()
         async let pTask = client.projects()
         async let tTask = client.tasks()
+        async let progTask = client.programs()
+        async let sysTask = client.systemInfo()
 
         var firstError: String?
         do {
@@ -139,7 +147,100 @@ final class AppModel {
         } catch {
             if firstError == nil { firstError = error.localizedDescription }
         }
+        do {
+            let result = try await progTask
+            programs = result.programs
+            // 按内存占用从高到低，方便一眼看出吃资源的应用
+            runningApps = result.running.sorted { ($0.memoryBytes ?? 0) > ($1.memoryBytes ?? 0) }
+        } catch {
+            if firstError == nil { firstError = error.localizedDescription }
+        }
+        do {
+            systemInfo = try await sysTask
+        } catch {
+            if firstError == nil { firstError = error.localizedDescription }
+        }
         lastError = firstError
+    }
+
+    /// 只刷新本机程序与系统信息
+    func refreshPrograms() async {
+        guard let client else { return }
+        async let progTask = client.programs()
+        async let sysTask = client.systemInfo()
+        var firstError: String?
+        do {
+            let result = try await progTask
+            programs = result.programs
+            runningApps = result.running.sorted { ($0.memoryBytes ?? 0) > ($1.memoryBytes ?? 0) }
+        } catch {
+            firstError = error.localizedDescription
+        }
+        do {
+            systemInfo = try await sysTask
+        } catch {
+            if firstError == nil { firstError = error.localizedDescription }
+        }
+        lastError = firstError
+    }
+
+    /// 切换受管程序开关
+    func toggleProgram(_ program: ProgramStatus) async {
+        guard let client else { return }
+        do {
+            if program.running {
+                try await client.stopProgram(id: program.id)
+            } else {
+                try await client.startProgram(id: program.id)
+            }
+            // 稍等让进程状态落稳再刷
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await refreshPrograms()
+        } catch {
+            lastError = error.localizedDescription
+            await refreshPrograms()
+        }
+    }
+
+    /// 退出正在运行的应用
+    func quitRunningApp(_ app: RunningApp) async {
+        guard let client else { return }
+        do {
+            try await client.quitApp(name: app.name)
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            await refreshPrograms()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// 打开 Applications 里的应用
+    func openAvailableApp(_ app: AvailableApp) async throws {
+        guard let client else { throw APIError(error: "尚未配置服务器") }
+        try await client.openApp(path: app.path)
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        await refreshPrograms()
+    }
+
+    /// 远程调节亮度（0~100），并回写本地 systemInfo.display
+    func setBrightness(percent: Int) async throws {
+        guard let client else { throw APIError(error: "尚未配置服务器") }
+        let display = try await client.setBrightness(percent: percent)
+        // Optional struct 不能通过 ?. 原地改字段，需整份写回
+        if var info = systemInfo {
+            info.display = display
+            systemInfo = info
+        }
+    }
+
+    /// 远程调节音量；muted 为 nil 时保持原静音状态
+    func setVolume(percent: Int, muted: Bool? = nil) async throws {
+        guard let client else { throw APIError(error: "尚未配置服务器") }
+        let audio = try await client.setVolume(percent: percent, muted: muted)
+        if var info = systemInfo {
+            info.audio = audio
+            systemInfo = info
+        }
     }
 
     /// 只刷新任务列表（任务跑动期间用）
@@ -181,5 +282,8 @@ final class AppModel {
         health = nil
         projects = []
         tasks = []
+        programs = []
+        runningApps = []
+        systemInfo = nil
     }
 }

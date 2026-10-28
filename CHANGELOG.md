@@ -5,8 +5,15 @@
 
 ## [未发布]
 
+### 文档
+
+- README 重写为可公开分享的部署手册（本地跑通 / VPS+frp / 配置 / API）；实现细节仍见 `docs/architecture.md`，不另拆「人看/AI 看」两份。
+
 ### 新增
 
+- **本机程序管理**：服务端新增 `/api/programs` 与 `/api/apps/*`，可查看正在运行的前台应用，并启停白名单程序（默认 Cursor / frp 隧道 / 防睡眠）；App 增加「本机」页，支持开关、关闭与从 Applications 打开。
+- **本机系统信息**：`GET /api/system` 汇总硬件、内存/交换、磁盘、电池、亮度、音量、网络（含 Wi‑Fi 信道与信号）、蓝牙已连接/已配对设备、负载与开机时长；运行中程序附带 RSS 内存占用。
+- **本机页导航 + 远程调节**：顶部胶囊可快速跳到概览/内存/磁盘/电池/显示/网络/蓝牙/受管/运行中；亮度、音量支持滑杆远程调节（`POST /api/system/brightness|volume`，亮度经 `displayctl.py` 调 DisplayServices）。
 - **App 图标资源位**：新增 `Assets.xcassets`（AppIcon 单尺寸 1024 版式），`project.yml` 里 `ASSETCATALOG_COMPILER_APPICON_NAME` 设为 `AppIcon`。当前放了一张占位图，直接把 `Assets.xcassets/AppIcon.appiconset/AppIcon.png` 换成正式图标即可。
 - **App 侧 markdown 渲染**：Agent 返回的正文不再按纯文本显示，改为解析后渲染——标题、有序/无序列表（含嵌套）、引用、分隔线、表格，以及行内粗体、斜体、行内代码与可点击链接。
 - 代码块单独排版：等宽字体、横向滚动、语言标签和一键复制；流式输出中未闭合的围栏按「到文末」处理，不会把后半段文字吞成正文。

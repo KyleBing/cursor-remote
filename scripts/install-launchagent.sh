@@ -18,7 +18,7 @@ fi
 mkdir -p "$LOG_DIR" "$(dirname "$PLIST")"
 
 echo "▸ 编译服务端"
-(cd "$ROOT/server" && go build -o bin/cursor-remote .)
+(cd "$ROOT/server" && go build -o bin/cursor-remote . && cp -f displayctl.py bin/displayctl.py)
 
 echo "▸ 写入 $PLIST"
 cat > "$PLIST" <<PLIST_EOF

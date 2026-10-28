@@ -39,6 +39,17 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/stream", s.auth(s.handleStream))
 	mux.HandleFunc("POST /api/tasks/{id}/stop", s.auth(s.handleStop))
 	mux.HandleFunc("POST /api/tasks/{id}/followup", s.auth(s.handleFollowUp))
+	// 本机程序：白名单启停 + 正在运行 / 可打开的 GUI 应用
+	mux.HandleFunc("GET /api/programs", s.auth(s.handleListPrograms))
+	mux.HandleFunc("POST /api/programs/{id}/start", s.auth(s.handleStartProgram))
+	mux.HandleFunc("POST /api/programs/{id}/stop", s.auth(s.handleStopProgram))
+	mux.HandleFunc("GET /api/apps", s.auth(s.handleListApps))
+	mux.HandleFunc("GET /api/apps/available", s.auth(s.handleAvailableApps))
+	mux.HandleFunc("POST /api/apps/open", s.auth(s.handleOpenApp))
+	mux.HandleFunc("POST /api/apps/quit", s.auth(s.handleQuitApp))
+	mux.HandleFunc("GET /api/system", s.auth(s.handleSystemInfo))
+	mux.HandleFunc("POST /api/system/brightness", s.auth(s.handleSetBrightness))
+	mux.HandleFunc("POST /api/system/volume", s.auth(s.handleSetVolume))
 	// 根路径给个简单说明页，方便用浏览器自测。
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -309,6 +320,146 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// handleListPrograms 返回白名单程序状态，并附带当前前台应用列表。
+func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"programs": listProgramStatuses(s.cfg),
+		"running":  listRunningApps(),
+	})
+}
+
+// handleSystemInfo 返回本机硬件 / 内存 / 磁盘 / 网络 / 蓝牙 / 亮度音量电池等。
+func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, collectSystemInfo())
+}
+
+// handleSetBrightness 远程调节亮度，body: {"percent":0-100}。
+func (s *Server) handleSetBrightness(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Percent *int `json:"percent"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Percent == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 percent（0~100）"})
+		return
+	}
+	d, err := setBrightnessPercent(*req.Percent)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "display": d})
+}
+
+// handleSetVolume 远程调节音量，body: {"percent":0-100,"muted":bool?}。
+func (s *Server) handleSetVolume(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Percent *int  `json:"percent"`
+		Muted   *bool `json:"muted"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Percent == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "需要 percent（0~100）"})
+		return
+	}
+	a, err := setVolume(*req.Percent, req.Muted)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "audio": a})
+}
+
+// handleStartProgram 启动白名单内的程序。
+func (s *Server) handleStartProgram(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.cfg.programByID(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "程序不在白名单内"})
+		return
+	}
+	if err := startProgram(p); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "started", "program": p.ID})
+}
+
+// handleStopProgram 关闭白名单内的程序。
+func (s *Server) handleStopProgram(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.cfg.programByID(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "程序不在白名单内"})
+		return
+	}
+	if err := stopProgram(p); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "stopped", "program": p.ID})
+}
+
+// handleListApps 只返回正在运行的前台 GUI 应用。
+func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"apps": listRunningApps()})
+}
+
+// handleAvailableApps 返回 Applications 目录里可打开的应用。
+func (s *Server) handleAvailableApps(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"apps": listAvailableApps()})
+}
+
+// handleOpenApp 打开应用：优先 path（须在 Applications 下），否则按 name。
+func (s *Server) handleOpenApp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	var err error
+	switch {
+	case strings.TrimSpace(req.Path) != "":
+		err = openAppPath(req.Path)
+	case strings.TrimSpace(req.Name) != "":
+		err = openApp(req.Name)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name 不能为空"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "opened"})
+}
+
+// handleQuitApp 退出正在运行的前台应用。
+func (s *Server) handleQuitApp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		PID  int    `json:"pid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	var err error
+	switch {
+	case strings.TrimSpace(req.Name) != "":
+		err = quitApp(req.Name)
+	case req.PID > 0:
+		err = quitAppByPID(req.PID)
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name 不能为空"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "quit"})
 }
 
 // writeSSE 输出一条 SSE 帧。

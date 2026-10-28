@@ -106,6 +106,88 @@ struct APIClient {
         let _: Wrapper = try await send("api/tasks/\(id)/followup", method: "POST", body: body)
     }
 
+    // MARK: - 本机程序
+
+    /// 受管程序 + 正在运行的前台应用
+    func programs() async throws -> (programs: [ProgramStatus], running: [RunningApp]) {
+        struct Wrapper: Decodable {
+            let programs: [ProgramStatus]
+            let running: [RunningApp]?
+        }
+        let wrapper: Wrapper = try await send("api/programs")
+        return (wrapper.programs, wrapper.running ?? [])
+    }
+
+    /// 本机系统信息（硬件 / 内存 / 磁盘 / 网络 / 蓝牙 / 亮度音量电池）
+    func systemInfo() async throws -> SystemInfo {
+        try await send("api/system")
+    }
+
+    /// 调节亮度 0~100
+    func setBrightness(percent: Int) async throws -> DisplayInfo {
+        struct Body: Encodable { let percent: Int }
+        struct Wrapper: Decodable {
+            let status: String
+            let display: DisplayInfo
+        }
+        let body = try JSONEncoder().encode(Body(percent: percent))
+        let w: Wrapper = try await send("api/system/brightness", method: "POST", body: body)
+        return w.display
+    }
+
+    /// 调节音量；muted 为 nil 表示不改静音状态
+    func setVolume(percent: Int, muted: Bool? = nil) async throws -> AudioInfo {
+        struct Body: Encodable {
+            let percent: Int
+            let muted: Bool?
+        }
+        struct Wrapper: Decodable {
+            let status: String
+            let audio: AudioInfo
+        }
+        let body = try JSONEncoder().encode(Body(percent: percent, muted: muted))
+        let w: Wrapper = try await send("api/system/volume", method: "POST", body: body)
+        return w.audio
+    }
+
+    /// 启动白名单程序
+    func startProgram(id: String) async throws {
+        struct Wrapper: Decodable { let status: String }
+        let _: Wrapper = try await send("api/programs/\(id)/start", method: "POST")
+    }
+
+    /// 停止白名单程序
+    func stopProgram(id: String) async throws {
+        struct Wrapper: Decodable { let status: String }
+        let _: Wrapper = try await send("api/programs/\(id)/stop", method: "POST")
+    }
+
+    /// Applications 目录可打开列表
+    func availableApps() async throws -> [AvailableApp] {
+        struct Wrapper: Decodable { let apps: [AvailableApp] }
+        let wrapper: Wrapper = try await send("api/apps/available")
+        return wrapper.apps
+    }
+
+    /// 打开应用（name 或 path 二选一）
+    func openApp(name: String? = nil, path: String? = nil) async throws {
+        struct Body: Encodable {
+            let name: String?
+            let path: String?
+        }
+        struct Wrapper: Decodable { let status: String }
+        let body = try JSONEncoder().encode(Body(name: name, path: path))
+        let _: Wrapper = try await send("api/apps/open", method: "POST", body: body)
+    }
+
+    /// 退出正在运行的前台应用
+    func quitApp(name: String) async throws {
+        struct Body: Encodable { let name: String }
+        struct Wrapper: Decodable { let status: String }
+        let body = try JSONEncoder().encode(Body(name: name))
+        let _: Wrapper = try await send("api/apps/quit", method: "POST", body: body)
+    }
+
     // MARK: - SSE
 
     /// 订阅任务事件流；after 为已收到的最后一个 seq，用于断线续传。

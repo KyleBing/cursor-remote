@@ -24,6 +24,7 @@ type Config struct {
 	Token           string    `json:"token"`
 	AgentPath       string    `json:"agentPath"`
 	Projects        []Project `json:"projects"`
+	Programs        []Program `json:"programs"`        // 可远程启停的本机程序白名单
 	DefaultApproval string    `json:"defaultApproval"` // default | auto-review | force
 	DefaultModel    string    `json:"defaultModel"`
 	AllowForce      bool      `json:"allowForce"`
@@ -111,6 +112,7 @@ func loadConfig() (*Config, error) {
 			Token:           newToken(),
 			AgentPath:       findAgentCLI(),
 			Projects:        discoverProjects(),
+			Programs:        defaultPrograms(),
 			DefaultApproval: "auto-review",
 			DefaultModel:    "",
 			AllowForce:      false,
@@ -140,6 +142,11 @@ func loadConfig() (*Config, error) {
 	if len(cfg.AllowedModels) == 0 {
 		cfg.AllowedModels = []string{"auto"}
 	}
+	// programs 字段缺失时用默认受管列表并写回；显式写成 [] 则保持为空。
+	seedPrograms := cfg.Programs == nil
+	if seedPrograms {
+		cfg.Programs = defaultPrograms()
+	}
 	// 白名单项目只保留真实存在的目录。
 	valid := cfg.Projects[:0]
 	for _, pr := range cfg.Projects {
@@ -148,6 +155,9 @@ func loadConfig() (*Config, error) {
 		}
 	}
 	cfg.Projects = valid
+	if seedPrograms {
+		_ = cfg.save()
+	}
 	return &cfg, nil
 }
 

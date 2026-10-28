@@ -1,252 +1,279 @@
 # cursor-remote
 
-在家用 iPad / iPhone 给公司 Mac 上的项目发指令，实时看 Cursor Agent 的执行过程，回家再打开 Cursor 验收。
+用 iPhone / iPad **远程操控公司 Mac 上的 Cursor Agent**：下发指令、看流式输出；顺带查看本机状态（内存/磁盘/电池/网络/蓝牙）、启停白名单程序、调节亮度与音量。
+
+最终验收仍建议回到 Mac 上的 Cursor 里做——远程负责「下达 + 观察」，不负责「点完所有审批」。
 
 ```
-iPad/iPhone App ──HTTPS──> 阿里云 nginx ──frp 隧道──> Mac 上的 Go 服务 ──> agent CLI（指定项目 cwd）
-                                                          │
-                                                          ├─ 任务队列 + 事件落盘（可断点续传）
-                                                          ├─ SSE 实时推送
-                                                          └─ 项目白名单 / token 鉴权
+手机 App ──HTTPS──> VPS nginx ──frp──> Mac Go 服务 ──> agent CLI（项目白名单 cwd）
+                                      │
+                                      ├─ 任务队列 + 事件落盘 + SSE
+                                      ├─ 本机程序启停 / 系统信息
+                                      └─ Bearer token 鉴权
 ```
 
-实现原理（链路各段职责、Cursor CLI 调用参数、流式与断点续传、headless 审批局限）见 **[docs/architecture.md](docs/architecture.md)**。
+更深的链路说明、CLI 参数、流式与审批局限见 [docs/architecture.md](docs/architecture.md)。
 
-## 目录
+---
 
-```
-cursor-remote/
-├── docs/
-│   └── architecture.md   实现原理：链路、CLI 调用、流式、审批取舍
-├── server/                Go 服务端（仅标准库，无第三方依赖）
-│   ├── main.go            启动、监听、优雅退出
-│   ├── config.go          配置读写 + token 生成 + 项目白名单
-│   ├── projects.go        从 ~/.cursor/agent-cli-state.json 发现项目
-│   ├── task.go            任务模型、持久化、子进程生命周期
-│   ├── parser.go          stream-json 事件解析
-│   ├── api.go             HTTP 接口 + SSE
-│   └── api_test.go        端到端测试（用 stub agent）
-├── ios/                   SwiftUI App（iPhone / iPad 通用，iOS 17+）
-│   ├── project.yml        xcodegen 工程定义
-│   └── CursorRemote/
-│       ├── AppModel.swift     全局状态
-│       ├── TaskSession.swift  单任务订阅 / 重连 / 事件聚合
-│       ├── APIClient.swift    接口 + SSE 解析
-│       ├── Models.swift       数据模型
-│       └── *View.swift        项目 / 任务 / 详情 / 设置
-├── relay/                 VPS 侧部署（frps + nginx）
-│   └── setup-aliyun.sh    一键安装并注入现有 443 站点
-└── scripts/
-    ├── run-server.sh            编译并启动服务
-    ├── install-launchagent.sh   注册服务端常驻
-    ├── install-frpc.sh          注册 frpc 隧道常驻
-    ├── install-caffeinate.sh    接电时阻止睡眠
-    ├── install-ios.sh           编译并安装到真机
-    └── check-network.sh         只读网络诊断
-```
+## 你需要什么
 
-## 前置条件
+| 角色 | 要求 |
+| --- | --- |
+| Mac（跑 Agent 的那台） | macOS，已安装并能 `agent login` 的 [Cursor CLI](https://cursor.com/docs/cli) |
+| 手机 | iOS 17+，用 Xcode 签到自己的设备（或后续 TestFlight） |
+| 跨网（二选一） | **A.** Tailscale 等同网；**B.** 一台有公网 IP / 域名的 VPS（推荐：Mac 只出站，走 frp） |
 
-1. **Cursor CLI**（服务端调用的就是它）
-   ```bash
-   curl https://cursor.com/install -fsS | bash
-   ~/.local/bin/agent login     # 只需一次，浏览器授权
-   ~/.local/bin/agent status    # 确认已登录
-   ```
+本地调试可以不要 VPS：服务监听局域网，App 填 `http://<Mac局域网IP>:8787`。
 
-2. **跨网通路**（二选一，本机用方案 B）
-   - **A. Tailscale**：Mac 与 iPad 装同一 tailnet，服务不暴露公网。注意与 Clash 类 fake-IP 代理的冲突，见 [docs/architecture.md](docs/architecture.md#网络选型为什么没用-tailscale)
-   - **B. VPS 反向隧道**（当前采用）：阿里云 nginx + frp，Mac 只需出站，见「网络通路」章节
+---
 
-3. **Mac 保持唤醒**：接电源，`./scripts/install-caffeinate.sh` 会在接电时阻止睡眠；但**合盖仍会睡**。
+## 5 分钟本地跑通（无公网）
 
-## 跑起来
+在 Mac 上：
 
 ```bash
-# 1. 启动服务端（前台，Ctrl-C 退出）
-./scripts/run-server.sh
+git clone https://github.com/KyleBing/cursor-remote.git
+cd cursor-remote
 
-# 2. 首次启动会打印访问地址和 token，并生成 ~/.cursor-remote/config.json
+# 1) Cursor CLI 已登录
+~/.local/bin/agent status
+
+# 2) 前台启动服务（首次会生成 ~/.cursor-remote/config.json 与 token）
+./scripts/run-server.sh -addr 0.0.0.0
+# 记下横幅里的 Token:
 ```
 
-输出示例：
-
-```
-监听: 127.0.0.1:8787
-Agent: /Users/you/.local/bin/agent
-项目: 16 个
-Token: 3f2a...
-```
-
-App 首次打开时填 `https://kylebing.cn/cursor-remote` 和 token 即可（地址已内置为默认值）。
+装 App 到已连接真机：
 
 ```bash
-# 3. 装到真机（不带参数 = 第一个可用真机）
+# 需本机有 Xcode + xcodegen，且能签你的 Team
+brew install xcodegen   # 若尚未安装
 ./scripts/install-ios.sh
-./scripts/install-ios.sh "Kyle's iPad"
+```
 
-# 4. 注册常驻（开机自启、崩溃自动拉起）
-./scripts/install-launchagent.sh   # Go 服务
-./scripts/install-frpc.sh <vps_ip> <frp_token>   # frp 隧道
-./scripts/install-caffeinate.sh    # 接电时阻止睡眠
+打开 App → 地址填 `http://<这台Mac的局域网IP>:8787` → 粘贴 token → 连接。
 
-# 卸载常驻
+> 公网部署时服务应只听 `127.0.0.1`（见下文），局域网调试才用 `-addr 0.0.0.0`。
+
+---
+
+## 公网部署（VPS + frp，推荐）
+
+目标形态：
+
+```
+手机 ──HTTPS──> 你的域名/VPS:443 (nginx)
+                      │ proxy /cursor-remote/ → 127.0.0.1:8787
+                      ▼
+                   frps (VPS 本机)
+                      │ Mac 出站连 VPS:7000
+                      ▼
+                   frpc → Mac 127.0.0.1:8787 (Go)
+```
+
+### 1. VPS：frps + nginx 路径
+
+准备：已备案或可用的 HTTPS 站点、能 SSH 的 root、先在你电脑上下好对应架构的 `frps`（国内 VPS 直连 GitHub 常超时）。
+
+```bash
+# 本机
+scp /path/to/frps root@<VPS_IP>:/tmp/frps
+scp relay/setup-aliyun.sh root@<VPS_IP>:/root/
+
+# VPS
+ssh root@<VPS_IP> 'bash /root/setup-aliyun.sh <自定义_frp_token>'
+```
+
+脚本会：安装 frps（systemd）、写入 nginx snippet，并在现有 443 站点注入 `/cursor-remote/`。  
+入口示例：`https://你的域名/cursor-remote/`。
+
+也可手改 nginx，核心是：
+
+```nginx
+location /cursor-remote/ {
+    proxy_pass http://127.0.0.1:8787/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+}
+```
+
+### 2. Mac：服务 + 隧道 + 防睡眠
+
+```bash
+cd cursor-remote
+
+# Go 服务常驻（默认 -addr 127.0.0.1）
+./scripts/install-launchagent.sh
+
+# frp 客户端常驻
+./scripts/install-frpc.sh <VPS_IP> <同一个_frp_token>
+
+# 接电时阻止睡眠（合盖仍会睡）
+./scripts/install-caffeinate.sh
+```
+
+查看 / 打印 token：
+
+```bash
+server/bin/cursor-remote -print-token
+# 或
+grep token ~/.cursor-remote/config.json
+```
+
+App 地址填：`https://你的域名/cursor-remote`（不要末尾多余路径纠结；与 nginx `location` 一致即可）。
+
+卸载常驻：
+
+```bash
 ./scripts/install-launchagent.sh remove
 ./scripts/install-frpc.sh remove
 ./scripts/install-caffeinate.sh remove
 ```
 
+### 3. 健康检查
+
+```bash
+TOKEN=$(server/bin/cursor-remote -print-token)
+
+# 本机
+curl -sS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/health
+
+# 公网（应返回 JSON，且 loggedIn 等字段正常）
+curl -sS -H "Authorization: Bearer $TOKEN" https://你的域名/cursor-remote/api/health
+```
+
+---
+
 ## 配置
 
-配置文件 `~/.cursor-remote/config.json`：
+路径：`~/.cursor-remote/config.json`（权限建议 `0600`）。改完需重启服务：
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/cn.kylebing.cursor-remote"
+```
 
 | 字段 | 说明 |
 | --- | --- |
-| `port` | 监听端口，默认 8787 |
-| `token` | Bearer token，首次启动自动生成（32 字节随机，64 位 hex）；改完重启服务即轮换 |
-| `agentPath` | agent CLI 路径，自动探测 |
-| `projects` | **项目白名单**，只有这里面的目录能被远程执行 |
-| `defaultApproval` | `auto-review` / `default` / `force` |
-| `allowForce` | 是否允许 App 选择"全部放行"，默认 `false` |
-| `allowedModels` | 可选，模型白名单 |
+| `port` | 默认 `8787` |
+| `token` | Bearer；空则启动时自动生成 |
+| `agentPath` | agent CLI 路径，可自动探测 |
+| `projects` | **项目白名单**（名 + 绝对路径）；首次可从 Cursor 状态推断 |
+| `programs` | **可远程启停程序**（`app` / `launchagent`）；缺省含 Cursor、frp、防睡眠 |
+| `defaultApproval` | `auto-review`（默认）/ `default` / `force` |
+| `allowForce` | 是否允许手机选「全部放行」，默认 `false` |
+| `allowedModels` | 可选模型白名单 |
 | `extraArgs` | 追加给 CLI 的参数 |
 
-改完重启服务生效。项目列表首次由 `~/.cursor/agent-cli-state.json` 自动推断，可手工增删。
+`programs` 示例：
 
-## 接口
+```json
+"programs": [
+  { "id": "cursor", "name": "Cursor", "kind": "app", "appName": "Cursor" },
+  { "id": "frpc", "name": "frp 隧道", "kind": "launchagent", "label": "cn.kylebing.cursor-remote-frpc" }
+]
+```
 
-除 `/` 外都需要 `Authorization: Bearer <token>`。
+---
+
+## HTTP API
+
+除 `GET /` 外均需：`Authorization: Bearer <token>`。  
+公网请求**不要**把 token 放进 query；`?token=` 仅本机回环可用。
+
+### Agent 任务
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/health` | 服务与 CLI 状态（含登录状态） |
-| GET | `/api/projects` | 白名单项目 + 会话统计 |
+| GET | `/api/health` | 服务与 CLI 状态 |
+| GET | `/api/projects` | 白名单项目 |
 | GET | `/api/tasks?limit=50` | 任务列表 |
-| POST | `/api/tasks` | 新建任务 `{project,prompt,mode,model,approval}` |
-| GET | `/api/tasks/{id}` | 任务详情 + 全量事件 |
-| GET | `/api/tasks/{id}/stream?after=N` | SSE，`after` 用于断线续传 |
+| POST | `/api/tasks` | 新建 `{project,prompt,mode,model,approval}` |
+| GET | `/api/tasks/{id}` | 详情 + 事件 |
+| GET | `/api/tasks/{id}/stream?after=N` | SSE 续传 |
 | POST | `/api/tasks/{id}/stop` | 中断 |
-| POST | `/api/tasks/{id}/followup` | `--resume` 续聊 |
+| POST | `/api/tasks/{id}/followup` | 同会话续聊 `{prompt}` |
 
-SSE 帧：`event: task`（元信息）、`event: event`（一条事件）、`event: done`（结束），另有 15 秒心跳注释行。
+SSE：`event: task` / `event` / `done`，约 15s 心跳注释行。
 
-## 安全模型
+### 本机程序与系统
 
-- **网络**：公网入口为 `https://kylebing.cn/cursor-remote/`，TLS 由阿里云 nginx 终止；服务端本身只监听 `127.0.0.1`，外部流量只能经 frp 隧道进入。
-- **鉴权**：32 字节随机 token，常数时间比较。`?token=` 参数**仅**对回环地址生效，公网请求只认 `Authorization: Bearer`。
-- **目录**：请求里的项目必须命中白名单，防止远程执行任意路径。
-- **审批**：默认 `--auto-review`，由服务端分类器放行安全命令、其余暂停；`--force` 需配置里显式打开 `allowForce`。
-- **流量**：事件的 `raw` 字段只落盘用于复盘，不推给客户端（实测省 70% 流量）。
-
-### token 怎么来、怎么换
-
-| 事项 | 说明 |
-| --- | --- |
-| 生成 | 首次启动（`~/.cursor-remote/config.json` 不存在）或配置里 `token` 为空时，自动生成 32 字节随机串（64 位 hex）并写回配置 |
-| 查看 | 启动横幅里的 `Token:` 一行；或 `server/bin/cursor-remote -print-token`；或直接看 `~/.cursor-remote/config.json` 的 `token` 字段（权限 0600） |
-| 轮换 | 改 `config.json` 的 `token` → 重启服务（LaunchAgent：`launchctl kickstart -k gui/$(id -u)/cn.kylebing.cursorremote`）→ 所有设备重新填新 token |
-
-### 多人使用：目前不支持
-
-服务端是**单实例、单 token**：一个 token 就是全权凭据，能访问白名单里的所有项目、读写所有任务（含中断别人发起的任务）。任务没有记录发起者，也没有按人隔离的项目列表。
-
-多台设备填同一个 token 是可以的，但那是「同一个人多台设备」，不是多人分权。真要给同事用，只有两条路：
-
-1. 每人自己的 Mac 上各跑一套（各自的 `~/.cursor-remote/config.json`、白名单、token、隧道）；
-2. 改造服务端：`token → 用户` 映射、任务记录 `owner`、按用户过滤列表与详情/SSE、白名单按用户分组——目前都还没做。
-
-## 网络通路（家 → 公司）
-
-服务端只跑在 Mac 上，iPad 需要一条跨网通路。两种选法：
-
-| 方案 | 适用 | 说明 |
+| 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| **Tailscale** | 公司允许装第三方 VPN | 零运维、免费、端到端加密、P2P 直连优先、DERP 兜底 |
-| **VPS 反向隧道** | 公司不允许装 / 网络封锁 | Mac **只出站**连 VPS，公司不用开端口；需自己做 TLS |
+| GET | `/api/programs` | 受管程序状态 + 运行中前台应用（含 RSS） |
+| POST | `/api/programs/{id}/start` | 启动白名单项 |
+| POST | `/api/programs/{id}/stop` | 停止 |
+| GET | `/api/apps` | 运行中前台应用 |
+| GET | `/api/apps/available` | `/Applications` 列表 |
+| POST | `/api/apps/open` | `{name}` 或 `{path}`（限 Applications） |
+| POST | `/api/apps/quit` | `{name}` 或 `{pid}` |
+| GET | `/api/system` | 硬件/内存/磁盘/电池/亮度音量/网络/蓝牙/负载 |
+| POST | `/api/system/brightness` | `{percent:0-100}` |
+| POST | `/api/system/volume` | `{percent:0-100, muted?:bool}` |
 
-> **本机最终采用：VPS 反向隧道。** 原因不是偏好，而是 Tailscale 在这台机器上撞上了两个硬阻碍：
-> 1. Tailscale App 的网络扩展卡在 `activated waiting for user`，系统设置里没有可点的开关（早期安装残留所致），而 SIP 已开启、无法 `systemextensionsctl reset`；
-> 2. 机器上常驻 **Clash Verge（TUN + fake-IP）**，与 Tailscale 同处隧道层，fake-IP 把 `controlplane.tailscale.com` 解析到 `198.18.x.x`，登录流程永远拿不到授权链接。
->
-> 详见下面「本机实际部署」里的踩坑记录。
+亮度调节依赖同目录 `server/displayctl.py`（经 DisplayServices）；`run-server.sh` / `install-launchagent.sh` 会拷到 `server/bin/`。
 
-先在公司的 Mac 上跑诊断（只读，不安装）：
+---
 
-```bash
-bash scripts/check-network.sh
-```
-
-它会检查控制面/DERP/出站连通性、MDM 管控状态、已有的坏安装，并给出结论。
-
-若走 VPS 反向隧道，务必：
-
-1. 服务端改成只监听 `127.0.0.1`（`-addr 127.0.0.1`），由 frp / Caddy 转发
-2. 外层套 TLS（Caddy 自动证书），否则 token 在公网是明文
-3. `?token=` 参数在公网会被拒（仅回环可用），App 用 Bearer 头不受影响
-
-### 本机实际部署（阿里云 + 路径前缀）
-
-链路：
+## 仓库结构
 
 ```
-iPad ──HTTPS──> kylebing.cn (阿里云 47.104.156.196)
-                      │ nginx :443  复用现有证书
-                      ▼
-                127.0.0.1:8787 (frps)
-                      │ frp 隧道（Mac 只出站连 :7000）
-                      ▼
-                Mac 127.0.0.1:8787 (Go 服务)
+cursor-remote/
+├── server/                 Go 服务（标准库；亮度脚本为 Python3）
+├── ios/                    SwiftUI App（iOS 17+，xcodegen）
+├── relay/                  VPS：setup-aliyun.sh、frp 样例配置
+├── scripts/                一键启动 / LaunchAgent / frpc / iOS 安装
+└── docs/architecture.md    实现原理（给要改代码的人或 Agent）
 ```
 
-选用 `kylebing.cn` 而不是另一个域名的原因：它是自有域名、已完成备案、证书已在用，而且**不需要新增 DNS 记录**——直接挂在现有 443 站点的 `/cursor-remote/` 路径下。
+常用脚本：
 
-VPS 侧（`relay/setup-aliyun.sh` 一条命令做完，幂等）：
+| 脚本 | 作用 |
+| --- | --- |
+| `scripts/run-server.sh` | 编译并前台运行 |
+| `scripts/install-launchagent.sh` | 服务常驻 |
+| `scripts/install-frpc.sh` | frpc 常驻 |
+| `scripts/install-caffeinate.sh` | 接电防睡眠 |
+| `scripts/install-ios.sh` | 编译安装到真机 |
+| `scripts/check-network.sh` | 只读网络诊断 |
 
-```bash
-scp /path/to/frps root@47.104.156.196:/tmp/frps
-scp relay/setup-aliyun.sh root@47.104.156.196:/root/
-ssh root@47.104.156.196 'bash /root/setup-aliyun.sh <frp_token>'
-```
+---
 
-它会：装 `frps` → 写 systemd 单元（`MemoryMax=128M`，小机器友好）→ 写 nginx snippet → 在主配置里注入一行 `include` → `nginx -t` 校验通过才 reload。
+## 安全要点
 
-Mac 侧：
+- 服务公网场景只绑 `127.0.0.1`，TLS 在 VPS 终止。
+- **一个 token = 全权**：能跑白名单项目、看任务、管本机程序与亮度音量。不是多用户系统。
+- 项目路径必须在 `projects` 白名单；打开 App 路径限制在 Applications。
+- 默认审批 `auto-review`；`force` 需 `allowForce: true`。
+- 轮换 token：改配置 → 重启服务 → 所有设备重填。
 
-```bash
-./scripts/install-frpc.sh 47.104.156.196 <frp_token>
-./scripts/install-caffeinate.sh   # 接电时阻止睡眠，否则隧道会断
-```
-
-访问地址：`https://kylebing.cn/cursor-remote/`
-
-**踩过的坑：**
-
-- **备份文件不能放在 `sites-enabled/`**。nginx 会加载该目录下*所有*文件，把 `default.bak.xxx` 放进去会立刻触发 `duplicate upstream "ws_server"`，`nginx -t` 直接失败。备份要放 `sites-enabled/` 之外（脚本里用 `/root/nginx-backups/`）。
-- 在国内 VPS 上用 `sslip.io` / `nip.io` 这类免费域名申请证书会失败：ACME 验证返回 `403`，响应体是运营商的 `非法阻断743` 页面。未备案域名在国内服务器上会被运营商拦在出口，**必须用已备案的自有域名**。
-- VPS 直连 GitHub 常年卡死（0 字节），frp 二进制要**在本机下载再 `scp` 上去**。
-- `Clash` 这类 fake-IP 代理会和 Tailscale 抢隧道层：DNS 把控制面域名解析到 `198.18.x.x`，而 Tailscale 走自己的 utun 不经 Clash 路由，导致登录永远卡在 `doLogin(hasUrl=false)`。两者共存需把 `*.tailscale.com` 加进 `fake-ip-filter` 并加路由排除规则。
-- **端口连通性不能用 `nc` 在本机测**：Clash TUN 会代理所有 TCP，连一个必然关闭的端口也返回「成功」。要么从另一台服务器测，要么直接打 HTTP 请求看响应内容。
-
-
-
-## 带宽实测
-
-单轮"重会话"（3000 字回答 + 80 次工具调用）实际传输 **约 107 KB**，连续流式峰值 **21 kbps**。
-1 Mbps 的服务器绰绰有余（占用 2%），瓶颈从来不是带宽。
-
-测量方法与优化细节见 [docs/architecture.md](docs/architecture.md#带宽优化)。
+---
 
 ## 已知限制
 
-1. **headless 下无法远程点"同意"**。`interaction_query` 由 CLI 本地策略自动应答，不走 stdin，所以手机上只能选审批档位，不能逐条批准。
-2. **事件流里没有工具返回内容**。`stream-json` 只推 `tool_call started/completed` 与参数，命令输出请到 `~/.cursor/projects/<项目>/terminals/` 或直接看 transcript。
-3. **Mac 必须醒着**，且服务需要常驻。已配两个 LaunchAgent（服务 + `caffeinate -s`）开机自启；但**合盖仍会睡眠**，远程使用需保持开盖。
-4. **App 默认走 https**（`https://kylebing.cn/cursor-remote`），正规证书，实际不再需要 ATS 例外；`NSAllowsArbitraryLoads` 仅为兼容局域网 http 直连回退而保留。
-5. **服务端只监听 `127.0.0.1`**，外部流量只能经 frp 隧道进来。这既省事也安全，但意味着**不能**再用 `http://<局域网IP>:8787` 直连；局域网调试请临时加 `-addr 0.0.0.0`。
+1. headless 下不能在手机上逐条点「同意」，只能选审批档位。
+2. SSE 事件不含工具 stdout 全文；完整输出在 Mac 本机 terminals / transcript。
+3. **合盖会睡**，远程使用需开盖（或外接显示器等保持唤醒策略）。
+4. 单实例单 token，不支持多人分权。
 
-## 后续可做
+---
 
-- 语音输入指令（`SFSpeechRecognizer`）
-- 通知：任务完成推送到 iPad（`UNUserNotificationCenter` + 服务端 APNs）
-- 只读浏览历史 transcript（`~/.cursor/projects/*/agent-transcripts/*.jsonl`）
-- 多 Mac 支持（服务器地址切换）
+## 给编码 Agent 的提示
+
+不必另写第二份 README。改代码时优先读：
+
+1. 本文件（部署与 API 契约）
+2. [docs/architecture.md](docs/architecture.md)（CLI 调用、SSE、网络取舍）
+3. `server/*.go`、`ios/CursorRemote/*`（实现）
+
+约束：服务端尽量保持**无第三方 Go 依赖**；iOS 用 xcodegen 生成工程，勿提交 `ios/CursorRemote.xcodeproj` / `server/bin/`。
+
+---
+
+## License
+
+按仓库内声明为准；若未附 License 文件，使用前请自行与作者确认。

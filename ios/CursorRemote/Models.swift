@@ -116,6 +116,197 @@ struct Health: Codable {
     )
 }
 
+/// 白名单受管程序（带运行态）
+struct ProgramStatus: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let kind: String
+    var running: Bool
+    var pid: Int?
+    var memoryBytes: Int64?
+    var detail: String?
+
+    /// 种类的可读描述
+    var kindLabel: String {
+        switch kind {
+        case "launchagent": return "服务"
+        default: return "应用"
+        }
+    }
+
+    static let placeholder = ProgramStatus(
+        id: "placeholder", name: "加载中", kind: "app",
+        running: false, pid: nil, memoryBytes: nil, detail: nil
+    )
+}
+
+/// 本机正在运行的前台应用
+struct RunningApp: Codable, Identifiable, Hashable {
+    let name: String
+    let bundleId: String?
+    let pid: Int
+    let memoryBytes: Int64?
+    let path: String?
+
+    var id: String { "\(pid)-\(name)" }
+
+    static let placeholder = RunningApp(
+        name: "加载中的应用", bundleId: nil, pid: 0, memoryBytes: 120_000_000, path: "/Applications/App.app"
+    )
+}
+
+// MARK: - 本机系统信息
+
+struct SystemInfo: Codable {
+    let at: Int64
+    let hardware: HardwareInfo
+    let memory: MemoryInfo
+    let disks: [DiskInfo]
+    let battery: BatteryInfo
+    var display: DisplayInfo
+    var audio: AudioInfo
+    let network: NetworkInfo
+    let bluetooth: BluetoothInfo
+    let loadAvg: [Double]?
+    let uptimeSec: Int64?
+
+    /// 开机时长可读
+    var uptimeText: String {
+        guard let sec = uptimeSec, sec > 0 else { return "—" }
+        let d = sec / 86400
+        let h = (sec % 86400) / 3600
+        let m = (sec % 3600) / 60
+        if d > 0 { return "\(d) 天 \(h) 小时" }
+        if h > 0 { return "\(h) 小时 \(m) 分" }
+        return "\(m) 分钟"
+    }
+
+    var loadText: String {
+        guard let load = loadAvg, !load.isEmpty else { return "—" }
+        return load.prefix(3).map { String(format: "%.2f", $0) }.joined(separator: " / ")
+    }
+}
+
+struct HardwareInfo: Codable {
+    let modelName: String
+    let modelIdentifier: String
+    let chip: String
+    let cores: String?
+    let memoryGB: Int
+    let serialNumber: String?
+}
+
+struct MemoryInfo: Codable {
+    let totalBytes: Int64
+    let usedBytes: Int64
+    let freeBytes: Int64
+    let wiredBytes: Int64?
+    let compressedBytes: Int64?
+    let appBytes: Int64?
+    let swapTotalBytes: Int64?
+    let swapUsedBytes: Int64?
+    let pressure: String?
+    let usedPercent: Double
+}
+
+struct DiskInfo: Codable, Identifiable {
+    let mount: String
+    let device: String?
+    let totalBytes: Int64
+    let usedBytes: Int64
+    let freeBytes: Int64
+    let usedPercent: Double
+    var id: String { mount + (device ?? "") }
+}
+
+struct BatteryInfo: Codable {
+    let percent: Int
+    let charging: Bool
+    let acPower: Bool
+    let present: Bool
+    let timeLeftMin: Int?
+    let detail: String?
+
+    var statusText: String {
+        if !present { return "无电池" }
+        if charging { return "充电中" }
+        if acPower { return "接电源" }
+        return "使用电池"
+    }
+}
+
+struct DisplayInfo: Codable {
+    let brightness: Double
+    let brightnessPct: Int
+    let nits: Double?
+    let autoBrightness: Bool
+}
+
+struct AudioInfo: Codable {
+    let outputVolume: Int
+    let inputVolume: Int
+    let alertVolume: Int
+    let muted: Bool
+}
+
+struct NetworkInfo: Codable {
+    let primaryInterface: String
+    let ipv4: String?
+    let ipv6: String?
+    let gateway: String?
+    let dns: [String]?
+    let wifi: WiFiInfo?
+}
+
+struct WiFiInfo: Codable {
+    let connected: Bool
+    let ssid: String?
+    let channel: String?
+    let phyMode: String?
+    let signalDBm: String?
+    let noiseDBm: String?
+    let transmitMbps: String?
+    let security: String?
+}
+
+struct BluetoothInfo: Codable {
+    let on: Bool
+    let address: String?
+    let connected: [BluetoothDevice]
+    let paired: [BluetoothDevice]
+}
+
+struct BluetoothDevice: Codable, Identifiable, Hashable {
+    let name: String
+    let address: String?
+    let type: String?
+    let connected: Bool
+    let battery: String?
+    let rssi: String?
+
+    var id: String { (address ?? name) + (connected ? "-c" : "-p") }
+}
+
+/// 字节数格式化（KB / MB / GB）
+enum ByteFormat {
+    static func string(_ bytes: Int64?) -> String {
+        guard let bytes, bytes > 0 else { return "—" }
+        let kb = Double(bytes) / 1024
+        if kb < 1024 { return String(format: "%.0f KB", kb) }
+        let mb = kb / 1024
+        if mb < 1024 { return String(format: "%.1f MB", mb) }
+        return String(format: "%.2f GB", mb / 1024)
+    }
+}
+
+/// Applications 目录里可打开的应用
+struct AvailableApp: Codable, Identifiable, Hashable {
+    let name: String
+    let path: String
+
+    var id: String { path }
+}
+
 /// 接口错误
 struct APIError: LocalizedError, Decodable {
     let error: String

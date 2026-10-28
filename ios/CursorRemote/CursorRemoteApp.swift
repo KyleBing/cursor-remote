@@ -40,14 +40,24 @@ struct RootView: View {
     }
 }
 
-/// 主界面：项目 / 任务 / 设置
+/// 主界面：项目 / 任务 / 本机 / 设置
 struct MainTabView: View {
+    init() {
+        // 底部 Tab 文字略放大，默认偏小
+        let font = UIFont.systemFont(ofSize: 11, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        UITabBarItem.appearance().setTitleTextAttributes(attrs, for: .normal)
+        UITabBarItem.appearance().setTitleTextAttributes(attrs, for: .selected)
+    }
+
     var body: some View {
         TabView {
             ProjectsView()
                 .tabItem { Label("项目", systemImage: "folder") }
             TasksView()
                 .tabItem { Label("任务", systemImage: "list.bullet.rectangle") }
+            ProgramsView()
+                .tabItem { Label("本机", systemImage: "laptopcomputer") }
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
         }
