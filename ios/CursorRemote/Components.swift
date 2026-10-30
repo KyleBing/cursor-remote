@@ -139,7 +139,7 @@ struct ServerStatusRow: View {
 
 struct BlockRow: View {
     let block: Block
-    @State private var expanded = false
+    @State private var thinkingExpanded = false
 
     var body: some View {
         switch block.kind {
@@ -158,31 +158,62 @@ struct BlockRow: View {
             MarkdownView(text: block.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-        case .tool:
-            DisclosureGroup(isExpanded: $expanded) {
-                Text(block.detail?.isEmpty == false ? block.detail! : "（无参数）")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: toolIcon(block.tool))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(block.tool ?? "tool")
-                        .font(.system(.caption, design: .monospaced).weight(.semibold))
-                    if block.running {
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Image(systemName: "checkmark")
+        case .thinking:
+            // 思考过程默认只露一两行，点开可看全文
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    thinkingExpanded.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "ellipsis.bubble")
                             .font(.caption2)
+                        Text(thinkingExpanded ? "思考过程" : thinkingPreview)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(thinkingExpanded ? nil : 2)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        Image(systemName: thinkingExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                if thinkingExpanded {
+                    Text(block.text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+        case .files:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("修改的文件")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(block.files) { file in
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.badge.gearshape")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(file.name)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Text("+\(file.add)")
+                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
                             .foregroundStyle(.green)
+                        Text("−\(file.del)")
+                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(.red)
                     }
                 }
             }
-            .padding(8)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
 
         case .info:
@@ -202,15 +233,13 @@ struct BlockRow: View {
         }
     }
 
-    /// 按工具名挑图标
-    private func toolIcon(_ tool: String?) -> String {
-        switch tool {
-        case "shell": return "terminal"
-        case "read": return "doc.text"
-        case "edit", "write": return "square.and.pencil"
-        case "grep", "search": return "magnifyingglass"
-        case "delete": return "trash"
-        default: return "wrench.and.screwdriver"
-        }
+    /// 折叠时的一两行摘要（取末尾，更接近当前思路）
+    private var thinkingPreview: String {
+        let oneLine = block.text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if oneLine.isEmpty { return "思考中…" }
+        if oneLine.count <= 80 { return oneLine }
+        return "…" + String(oneLine.suffix(80))
     }
 }

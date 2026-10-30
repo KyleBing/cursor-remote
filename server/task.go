@@ -469,7 +469,8 @@ func (m *Manager) buildArgs(t *Task, prompt, mode, model, approval string, resum
 		args = append(args, "--auto-review")
 	}
 	args = append(args, m.cfg.ExtraArgs...)
-	args = append(args, prompt)
+	// -- 结束选项解析：prompt 以 - 开头（如列表项）时不能被当成 CLI 参数
+	args = append(args, "--", prompt)
 	return args
 }
 

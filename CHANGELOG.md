@@ -5,12 +5,17 @@
 
 ## [未发布]
 
+### 变更
+
+- **任务详情精简**：不再展开具体工具步骤（读文件 / 搜索 / 命令等）；中间思考默认折叠成一两行摘要；改动文件单独列出，并显示 `+行数` / `−行数`。助手正文去重，避免流式增量与完整帧叠成两遍。
+
 ### 文档
 
 - README 重写为可公开分享的部署手册（本地跑通 / VPS+frp / 配置 / API）；实现细节仍见 `docs/architecture.md`，不另拆「人看/AI 看」两份。
 
 ### 新增
 
+- **项目白名单可同步/增删**：`POST /api/projects/sync` 从 Cursor CLI 状态合并新目录；`POST/DELETE /api/projects` 按路径增删；CLI 支持 `-sync-projects` / `-add-project`；App 项目页右上角「同步」一键导入。不必再手改 `config.json` 并重启。
 - **本机程序管理**：服务端新增 `/api/programs` 与 `/api/apps/*`，可查看正在运行的前台应用，并启停白名单程序（默认 Cursor / frp 隧道 / 防睡眠）；App 增加「本机」页，支持开关、关闭与从 Applications 打开。
 - **本机系统信息**：`GET /api/system` 汇总硬件、内存/交换、磁盘、电池、亮度、音量、网络（含 Wi‑Fi 信道与信号）、蓝牙已连接/已配对设备、负载与开机时长；运行中程序附带 RSS 内存占用。
 - **本机页导航 + 远程调节**：顶部胶囊可快速跳到概览/内存/磁盘/电池/显示/网络/蓝牙/受管/运行中；亮度、音量支持滑杆远程调节（`POST /api/system/brightness|volume`，亮度经 `displayctl.py` 调 DisplayServices）。
@@ -28,6 +33,7 @@
 
 ### 修复
 
+- **对话里以 `-` 开头的纯文本被当成 CLI 参数**：`buildArgs` 在 prompt 前加 `--` 结束选项解析；续聊发送「- 列表项」一类消息不再触发 `unknown option`。
 - App 重启后 token 丢失、要重新填写（旧代码忽略 `SecItemAdd/CopyMatching` 的状态码，钥匙串失效时无感知）。
 - **首次配置只要输入框非空就跳进主界面**：`isConfigured` 原先只看 `地址 + token` 是否非空，粘贴 token 的瞬间视图就切到主界面，`saveSettings()` 从未执行，token 因此一次都没落盘。现在改为以持久化标记 `cursorremote.configured` 为准，且必须「token 落盘成功 + 连接成功」才置位；退出登录会一并清除。
 - **配置完成后切页卡顿、列表偶发空白**：

@@ -63,7 +63,7 @@ struct SettingsView: View {
                         Text("1. Mac 上装常驻服务：./scripts/install-launchagent.sh（开机自启、崩溃自动拉起）")
                         Text("2. 取 token：执行 server/bin/cursor-remote -print-token，或看 ~/.cursor-remote/config.json 的 token 字段")
                         Text("3. 地址填公网入口 https://kylebing.cn/cursor-remote（阿里云 nginx + frp 隧道），手机不必和 Mac 在同一个网络")
-                        Text("4. 只有 config.json 里 projects 白名单中的目录能被远程执行")
+                        Text("4. 只有白名单目录能被远程执行；项目页点「同步」可从 Cursor CLI 最近项目自动导入，也可在 Mac 上执行 server/bin/cursor-remote -sync-projects / -add-project <路径>")
                         Text("5. Mac 接电源并保持开盖，合盖会睡眠、隧道随之断开")
                         Text("6. 在项目页选项目、填指令即可发起；任务页可看进度与历史")
                     }

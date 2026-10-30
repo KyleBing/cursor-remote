@@ -1,12 +1,25 @@
 import Foundation
 import Observation
 
+/// 单个文件的改动统计（详情页列表用）
+struct FileChange: Identifiable, Hashable {
+    var path: String
+    var add: Int
+    var del: Int
+
+    var id: String { path }
+
+    /// 只显示文件名
+    var name: String { (path as NSString).lastPathComponent }
+}
+
 /// 渲染用的一段内容块
 struct Block: Identifiable, Hashable {
     enum Kind: Hashable {
         case user      // 用户指令
-        case assistant // 助手正文
-        case tool      // 工具调用
+        case assistant // 助手正文（用户该看的结论）
+        case thinking  // 中间思考（界面只展示一两行摘要）
+        case files     // 改动文件列表
         case info      // 系统提示
         case error     // 错误 / stderr
     }
@@ -14,9 +27,7 @@ struct Block: Identifiable, Hashable {
     var id: Int
     var kind: Kind
     var text: String
-    var tool: String?
-    var detail: String?
-    var running: Bool = false
+    var files: [FileChange] = []
 }
 
 /// 单个任务的实时会话：负责订阅 SSE、累积事件、驱动界面。
@@ -33,6 +44,8 @@ final class TaskSession {
 
     private var lastSeq = 0
     private var lastEventType = ""
+    /// 已计入文件列表的 tool call，避免 started/completed 各加一遍
+    private var countedCallIDs: Set<String> = []
     private var loop: Task<Void, Never>?
 
     init(info: TaskInfo) {
@@ -138,35 +151,31 @@ final class TaskSession {
         switch e.type {
         case "status":
             if let s = e.text { info.status = s }
-            return
-        case "assistant":
-            guard let text = e.text, !text.isEmpty else { return }
-            // 连续的增量片段合并到同一个块
-            if lastEventType == "assistant", var last = blocks.last, last.kind == .assistant {
-                last.text += text
-                blocks[blocks.count - 1] = last
-            } else {
-                blocks.append(Block(id: e.seq, kind: .assistant, text: text))
+        case "user":
+            if let text = e.text, !text.isEmpty, text != info.prompt {
+                blocks.append(Block(id: e.seq, kind: .user, text: text))
             }
+        case "assistant":
+            appendAssistant(seq: e.seq, text: e.text ?? "")
+        case "thinking":
+            appendThinking(seq: e.seq, text: e.text ?? "")
         case "tool_call":
-            if e.sub == "started" {
-                blocks.append(Block(id: e.seq, kind: .tool, text: e.callID ?? "", tool: e.tool, detail: e.detail, running: true))
-            } else if let idx = blocks.lastIndex(where: { $0.kind == .tool && $0.text == (e.callID ?? "") && $0.running }) {
-                blocks[idx].running = false
-                if let d = e.detail, !d.isEmpty { blocks[idx].detail = d }
+            // 不展示具体操作步骤；只把改文件汇总进列表
+            if e.sub == "completed" || e.sub == "started" {
+                applyFileChange(from: e)
             }
         case "stderr", "error":
             if let text = e.text, !text.isEmpty {
                 blocks.append(Block(id: e.seq, kind: .error, text: text))
             }
         case "info":
-            if let text = e.text, !text.isEmpty {
+            // 旧数据里思考被标成 info，直接丢掉；只保留会话就绪 / 审批提示
+            if e.sub == "thinking" { break }
+            if let text = e.text, !text.isEmpty, e.sub == "init" || e.sub == "approval" {
                 blocks.append(Block(id: e.seq, kind: .info, text: text))
             }
         default:
-            if let text = e.text, !text.isEmpty {
-                blocks.append(Block(id: e.seq, kind: .info, text: text))
-            }
+            break
         }
         lastEventType = e.type
     }
@@ -174,35 +183,43 @@ final class TaskSession {
     /// 从头重建块列表（首次加载 / 重连后）
     private func rebuildBlocks() {
         var out: [Block] = []
+        var fileMap: [String: FileChange] = [:]
+        var filesBlockIndex: Int?
+        var seenCalls: Set<String> = []
         var prevType = ""
+
         for e in events {
             switch e.type {
             case "user":
-                // 服务端会回显用户输入，首条与任务 prompt 重复则不显示
                 if let text = e.text, !text.isEmpty, text != info.prompt {
                     out.append(Block(id: e.seq, kind: .user, text: text))
                 }
             case "assistant":
-                guard let text = e.text, !text.isEmpty else { continue }
-                if prevType == "assistant", var last = out.last, last.kind == .assistant {
-                    last.text += text
-                    out[out.count - 1] = last
-                } else {
-                    out.append(Block(id: e.seq, kind: .assistant, text: text))
-                }
+                mergeAssistant(into: &out, seq: e.seq, text: e.text ?? "", prevType: prevType)
+            case "thinking":
+                mergeThinking(into: &out, seq: e.seq, text: e.text ?? "")
             case "tool_call":
-                if e.sub == "started" {
-                    out.append(Block(id: e.seq, kind: .tool, text: e.callID ?? "", tool: e.tool, detail: e.detail, running: true))
-                } else if let idx = out.lastIndex(where: { $0.kind == .tool && $0.text == (e.callID ?? "") && $0.running }) {
-                    out[idx].running = false
-                    if let d = e.detail, !d.isEmpty { out[idx].detail = d }
+                if e.sub == "completed" || e.sub == "started" {
+                    let callKey = e.callID ?? "seq-\(e.seq)"
+                    // 有 completed 时跳过对应 started，避免加减两遍
+                    if e.sub == "started",
+                       events.contains(where: { $0.callID == e.callID && $0.sub == "completed" }) {
+                        break
+                    }
+                    if seenCalls.contains(callKey) { break }
+                    if let change = FileChangeParser.parse(tool: e.tool, detail: e.detail) {
+                        seenCalls.insert(callKey)
+                        mergeFile(change, into: &fileMap)
+                        upsertFilesBlock(seq: e.seq, fileMap: fileMap, into: &out, index: &filesBlockIndex)
+                    }
                 }
             case "stderr", "error":
                 if let text = e.text, !text.isEmpty {
                     out.append(Block(id: e.seq, kind: .error, text: text))
                 }
             case "info":
-                if let text = e.text, !text.isEmpty {
+                if e.sub == "thinking" { break }
+                if let text = e.text, !text.isEmpty, e.sub == "init" || e.sub == "approval" {
                     out.append(Block(id: e.seq, kind: .info, text: text))
                 }
             default:
@@ -211,7 +228,105 @@ final class TaskSession {
             prevType = e.type
         }
         blocks = out
+        countedCallIDs = seenCalls
         lastEventType = events.last?.type ?? ""
+    }
+
+    // MARK: - 块合并
+
+    /// 流式助手正文：合并增量，并用完整帧覆盖重复拼接
+    private func appendAssistant(seq: Int, text: String) {
+        guard !text.isEmpty else { return }
+        if lastEventType == "assistant", var last = blocks.last, last.kind == .assistant {
+            last.text = Self.mergeAssistantText(last.text, text)
+            blocks[blocks.count - 1] = last
+        } else {
+            blocks.append(Block(id: seq, kind: .assistant, text: text))
+        }
+    }
+
+    private func mergeAssistant(into out: inout [Block], seq: Int, text: String, prevType: String) {
+        guard !text.isEmpty else { return }
+        if prevType == "assistant", var last = out.last, last.kind == .assistant {
+            last.text = Self.mergeAssistantText(last.text, text)
+            out[out.count - 1] = last
+        } else {
+            out.append(Block(id: seq, kind: .assistant, text: text))
+        }
+    }
+
+    /// 增量 token 追加；若新帧是已有正文的完整版则替换，避免「流式 + 整段」翻倍
+    static func mergeAssistantText(_ current: String, _ incoming: String) -> String {
+        if incoming == current { return current }
+        if incoming.hasPrefix(current) { return incoming }
+        if current.hasPrefix(incoming) { return current }
+        return current + incoming
+    }
+
+    private func appendThinking(seq: Int, text: String) {
+        guard !text.isEmpty else { return }
+        // 全程只保留一块思考，避免步骤间反复插入占篇幅
+        if let idx = blocks.firstIndex(where: { $0.kind == .thinking }) {
+            blocks[idx].text += text
+        } else {
+            blocks.append(Block(id: seq, kind: .thinking, text: text))
+        }
+    }
+
+    private func mergeThinking(into out: inout [Block], seq: Int, text: String) {
+        guard !text.isEmpty else { return }
+        if let idx = out.firstIndex(where: { $0.kind == .thinking }) {
+            out[idx].text += text
+        } else {
+            out.append(Block(id: seq, kind: .thinking, text: text))
+        }
+    }
+
+    /// 把一次改文件事件并入列表块
+    private func applyFileChange(from e: AgentEvent) {
+        let callKey = e.callID ?? "seq-\(e.seq)"
+        if countedCallIDs.contains(callKey) { return }
+        // 先到的 started 先展示；随后 completed 若已计入同 call 则跳过
+        guard let change = FileChangeParser.parse(tool: e.tool, detail: e.detail) else { return }
+        countedCallIDs.insert(callKey)
+
+        var fileMap: [String: FileChange] = [:]
+        if let existing = blocks.first(where: { $0.kind == .files }) {
+            for f in existing.files { fileMap[f.path] = f }
+        }
+        mergeFile(change, into: &fileMap)
+
+        if let idx = blocks.firstIndex(where: { $0.kind == .files }) {
+            blocks[idx].files = Self.sortedFiles(fileMap)
+            blocks[idx].text = "\(fileMap.count) 个文件"
+        } else {
+            blocks.append(Block(id: e.seq, kind: .files, text: "\(fileMap.count) 个文件", files: Self.sortedFiles(fileMap)))
+        }
+    }
+
+    private func mergeFile(_ change: FileChange, into map: inout [String: FileChange]) {
+        if var cur = map[change.path] {
+            cur.add += change.add
+            cur.del += change.del
+            map[change.path] = cur
+        } else {
+            map[change.path] = change
+        }
+    }
+
+    private func upsertFilesBlock(seq: Int, fileMap: [String: FileChange], into out: inout [Block], index: inout Int?) {
+        let files = Self.sortedFiles(fileMap)
+        if let i = index {
+            out[i].files = files
+            out[i].text = "\(files.count) 个文件"
+        } else {
+            index = out.count
+            out.append(Block(id: seq, kind: .files, text: "\(files.count) 个文件", files: files))
+        }
+    }
+
+    private static func sortedFiles(_ map: [String: FileChange]) -> [FileChange] {
+        map.values.sorted { $0.path < $1.path }
     }
 
     // MARK: - 操作
@@ -241,5 +356,75 @@ final class TaskSession {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+}
+
+// MARK: - 解析工具 detail 里的文件改动
+
+enum FileChangeParser {
+    /// 从 tool + detail 解析出路径与增减行；兼容旧版带 streamContent 的 detail
+    static func parse(tool: String?, detail: String?) -> FileChange? {
+        guard let tool, isFileTool(tool) else { return nil }
+        guard let detail, !detail.isEmpty else { return nil }
+
+        if let data = detail.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let path = obj["path"] as? String, !path.isEmpty {
+            // 新格式：服务端已算好 add/del
+            if obj["add"] != nil || obj["del"] != nil {
+                return FileChange(path: path, add: intValue(obj["add"]), del: intValue(obj["del"]))
+            }
+            // 旧格式：detail 里带着 streamContent 正文
+            if let content = obj["streamContent"] as? String {
+                return FileChange(path: path, add: lineCount(content), del: 0)
+            }
+            if let content = obj["contents"] as? String {
+                return FileChange(path: path, add: lineCount(content), del: tool == "delete" ? lineCount(content) : 0)
+            }
+            return FileChange(path: path, add: 0, del: tool == "delete" ? 1 : 0)
+        }
+
+        // detail 被截断时 JSON 可能坏掉，用正则捞 path，并用 \\n 粗估行数
+        guard let path = match(detail, pattern: #""path"\s*:\s*"((?:\\.|[^"\\])*)""#) else { return nil }
+        let unescaped = path
+            .replacingOccurrences(of: "\\/", with: "/")
+            .replacingOccurrences(of: "\\\\", with: "\\")
+        let add: Int
+        if let content = match(detail, pattern: #""streamContent"\s*:\s*"(.*)$"#) {
+            add = content.components(separatedBy: "\\n").count
+        } else {
+            add = 0
+        }
+        return FileChange(path: unescaped, add: add, del: tool == "delete" ? 1 : 0)
+    }
+
+    private static func isFileTool(_ tool: String) -> Bool {
+        switch tool {
+        case "edit", "write", "delete": return true
+        default: return false
+        }
+    }
+
+    private static func intValue(_ v: Any?) -> Int {
+        switch v {
+        case let i as Int: return i
+        case let d as Double: return Int(d)
+        case let n as NSNumber: return n.intValue
+        default: return 0
+        }
+    }
+
+    private static func lineCount(_ s: String) -> Int {
+        guard !s.isEmpty else { return 0 }
+        let n = s.filter { $0 == "\n" }.count
+        return s.hasSuffix("\n") ? n : n + 1
+    }
+
+    private static func match(_ text: String, pattern: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let m = re.firstMatch(in: text, range: range), m.numberOfRanges > 1,
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        return String(text[r])
     }
 }

@@ -270,6 +270,26 @@ final class AppModel {
         return detail.info
     }
 
+    /// 从 Cursor CLI 最近项目合并进白名单，返回本次新增数量
+    @discardableResult
+    func syncProjectsFromCLI() async throws -> Int {
+        guard let client else { throw APIError(error: "尚未配置服务器") }
+        let result = try await client.syncProjects()
+        projects = result.projects
+        if let h = health {
+            health = Health(
+                ok: h.ok,
+                agentPath: h.agentPath,
+                version: h.version,
+                loggedIn: h.loggedIn,
+                detail: h.detail,
+                projects: result.projects.count
+            )
+        }
+        lastError = nil
+        return result.addedCount
+    }
+
     /// 清空配置（回到设置引导页）
     func signOut() {
         TokenStore.clear()

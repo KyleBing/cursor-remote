@@ -86,8 +86,11 @@ flowchart TB
 | `--model <name>` | 指定模型；`auto` 或空表示用账号默认 |
 | `--auto-review` | 由分类器放行安全命令，可疑的暂停（默认档位） |
 | `--force` | 全部放行，不询问 |
+| `--` | 结束选项解析；其后整段是用户 prompt（防止 `- 列表项` 被 CLI 当成未知参数） |
 
 子进程环境额外设了 `NO_COLOR=1`、`TERM=dumb`、`CI=1`，避免输出里混入 ANSI 控制符干扰解析。
+
+prompt 作为最后一个位置参数传入；若用户消息以 `-` / `--` 开头（常见于 markdown 列表），必须先写 `--`，否则 agent CLI 会报 `unknown option`。
 
 ### 子进程生命周期
 

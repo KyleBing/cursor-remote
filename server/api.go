@@ -18,6 +18,7 @@ type Server struct {
 	cfg *Config
 	mgr *Manager
 
+	cfgMu      sync.Mutex // 保护 projects 白名单的读写与落盘
 	healthMu   sync.Mutex
 	healthAt   time.Time
 	healthBody map[string]any
@@ -33,6 +34,9 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.auth(s.handleHealth))
 	mux.HandleFunc("GET /api/projects", s.auth(s.handleProjects))
+	mux.HandleFunc("POST /api/projects", s.auth(s.handleAddProject))
+	mux.HandleFunc("POST /api/projects/sync", s.auth(s.handleSyncProjects))
+	mux.HandleFunc("DELETE /api/projects", s.auth(s.handleRemoveProject))
 	mux.HandleFunc("GET /api/tasks", s.auth(s.handleListTasks))
 	mux.HandleFunc("POST /api/tasks", s.auth(s.handleCreateTask))
 	mux.HandleFunc("GET /api/tasks/{id}", s.auth(s.handleGetTask))
@@ -143,12 +147,124 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleProjects 返回白名单项目及其会话统计。
 func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"projects": s.projectInfos()})
+}
+
+// projectInfos 在锁内拷贝白名单并附带会话统计。
+func (s *Server) projectInfos() []ProjectInfo {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 	out := make([]ProjectInfo, 0, len(s.cfg.Projects))
 	for _, p := range s.cfg.Projects {
 		sessions, last := projectStatsFor(p.Path)
 		out = append(out, ProjectInfo{Name: p.Name, Path: p.Path, Sessions: sessions, LastActive: last})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
+	return out
+}
+
+// invalidateHealthCache 项目数变化后清掉健康检查缓存。
+func (s *Server) invalidateHealthCache() {
+	s.healthMu.Lock()
+	s.healthBody = nil
+	s.healthMu.Unlock()
+}
+
+// addProjectReq 是手动添加白名单项目的请求体。
+type addProjectReq struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// handleAddProject 按绝对路径（或 ~ 路径）加入白名单。
+func (s *Server) handleAddProject(w http.ResponseWriter, r *http.Request) {
+	var req addProjectReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 path"})
+		return
+	}
+	s.cfgMu.Lock()
+	proj, added, err := s.cfg.addProject(req.Name, req.Path)
+	s.cfgMu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if added {
+		s.invalidateHealthCache()
+	}
+	sessions, last := projectStatsFor(proj.Path)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added":   added,
+		"project": ProjectInfo{Name: proj.Name, Path: proj.Path, Sessions: sessions, LastActive: last},
+		"projects": s.projectInfos(),
+	})
+}
+
+// handleSyncProjects 从 Cursor CLI 状态合并新项目到白名单。
+func (s *Server) handleSyncProjects(w http.ResponseWriter, r *http.Request) {
+	s.cfgMu.Lock()
+	added, err := s.cfg.syncProjectsFromCLI()
+	s.cfgMu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if len(added) > 0 {
+		s.invalidateHealthCache()
+	}
+	addedInfo := make([]ProjectInfo, 0, len(added))
+	for _, p := range added {
+		sessions, last := projectStatsFor(p.Path)
+		addedInfo = append(addedInfo, ProjectInfo{Name: p.Name, Path: p.Path, Sessions: sessions, LastActive: last})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added":    addedInfo,
+		"addedCount": len(addedInfo),
+		"projects": s.projectInfos(),
+	})
+}
+
+// removeProjectReq 按名称或路径移除白名单项。
+type removeProjectReq struct {
+	Project string `json:"project"`
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+}
+
+// handleRemoveProject 从白名单删除项目（不删磁盘目录）。
+func (s *Server) handleRemoveProject(w http.ResponseWriter, r *http.Request) {
+	var req removeProjectReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	key := strings.TrimSpace(req.Project)
+	if key == "" {
+		key = strings.TrimSpace(req.Path)
+	}
+	if key == "" {
+		key = strings.TrimSpace(req.Name)
+	}
+	s.cfgMu.Lock()
+	removed, ok, err := s.cfg.removeProject(key)
+	s.cfgMu.Unlock()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "白名单中没有该项目: " + key})
+		return
+	}
+	s.invalidateHealthCache()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"removed":  removed,
+		"projects": s.projectInfos(),
+	})
 }
 
 // handleListTasks 返回任务列表。
@@ -177,10 +293,12 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 只允许白名单内的项目，避免远程执行任意目录。
+	s.cfgMu.Lock()
 	proj, ok := s.cfg.projectByName(req.Project)
 	if !ok {
 		proj, ok = s.cfg.projectByPath(req.Project)
 	}
+	s.cfgMu.Unlock()
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "项目不在白名单内: " + req.Project})
 		return

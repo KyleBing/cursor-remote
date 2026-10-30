@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,6 +123,67 @@ func TestProjects(t *testing.T) {
 	}
 	if len(resp.Projects) != 1 || resp.Projects[0].Path != projDir {
 		t.Fatalf("项目列表不符: %+v", resp.Projects)
+	}
+}
+
+// TestAddAndSyncProjects 校验手动添加与 CLI 状态同步。
+func TestAddAndSyncProjects(t *testing.T) {
+	s, cfg, _ := newTestServer(t)
+	home := os.Getenv("HOME")
+	extra := filepath.Join(home, "extra-project")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 手动添加
+	body := fmt.Sprintf(`{"path":%q}`, extra)
+	w := doReq(t, s, "POST", "/api/projects", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("添加失败 %d: %s", w.Code, w.Body.String())
+	}
+	var addResp struct {
+		Added    bool          `json:"added"`
+		Projects []ProjectInfo `json:"projects"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &addResp); err != nil {
+		t.Fatal(err)
+	}
+	if !addResp.Added || len(addResp.Projects) != 2 {
+		t.Fatalf("添加结果不符: %+v", addResp)
+	}
+
+	// 写入 CLI 状态，再同步第三个项目
+	cliProj := filepath.Join(home, "cli-project")
+	if err := os.MkdirAll(cliProj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cursorDir := filepath.Join(home, ".cursor")
+	if err := os.MkdirAll(cursorDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := []byte(`{"workerIdsByDisplayName":{"~/cli-project @ Test Machine":"abc"}}`)
+	if err := os.WriteFile(filepath.Join(cursorDir, "agent-cli-state.json"), state, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w = doReq(t, s, "POST", "/api/projects/sync", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("同步失败 %d: %s", w.Code, w.Body.String())
+	}
+	var syncResp struct {
+		AddedCount int           `json:"addedCount"`
+		Projects   []ProjectInfo `json:"projects"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &syncResp); err != nil {
+		t.Fatal(err)
+	}
+	if syncResp.AddedCount != 1 || len(syncResp.Projects) != 3 {
+		t.Fatalf("同步结果不符: %+v cfg=%+v", syncResp, cfg.Projects)
+	}
+
+	// 删除
+	w = doReq(t, s, "DELETE", "/api/projects", `{"path":"`+extra+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("删除失败 %d: %s", w.Code, w.Body.String())
 	}
 }
 

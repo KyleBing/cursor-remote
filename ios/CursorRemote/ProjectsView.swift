@@ -5,6 +5,8 @@ struct ProjectsView: View {
     @Environment(AppModel.self) private var model
     @State private var newTaskProject: ProjectInfo?
     @State private var path: [TaskInfo] = []
+    @State private var syncing = false
+    @State private var syncMessage: String?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -27,6 +29,14 @@ struct ProjectsView: View {
                     }
                 }
 
+                if let syncMessage {
+                    Section {
+                        Text(syncMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("项目") {
                     if model.projects.isEmpty {
                         if model.isLoading {
@@ -36,7 +46,7 @@ struct ProjectsView: View {
                                     .redacted(reason: .placeholder)
                             }
                         } else {
-                            Text("没有可用项目")
+                            Text("没有可用项目。可点右上角同步，从 Mac 上 Cursor CLI 最近用过的目录导入。")
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -58,6 +68,20 @@ struct ProjectsView: View {
                     await model.refresh()
                 }
             }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await syncFromCLI() }
+                    } label: {
+                        if syncing {
+                            ProgressView()
+                        } else {
+                            Label("同步", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    .disabled(syncing || model.client == nil)
+                }
+            }
             .navigationDestination(for: TaskInfo.self) { task in
                 TaskDetailView(task: task)
             }
@@ -67,6 +91,18 @@ struct ProjectsView: View {
                     path.append(created)
                 }
             }
+        }
+    }
+
+    /// 把 Mac 上 Cursor CLI 出现过的目录合并进白名单
+    private func syncFromCLI() async {
+        syncing = true
+        defer { syncing = false }
+        do {
+            let added = try await model.syncProjectsFromCLI()
+            syncMessage = added == 0 ? "已是最新，没有新项目" : "已同步，新增 \(added) 个项目"
+        } catch {
+            syncMessage = error.localizedDescription
         }
     }
 }

@@ -16,9 +16,11 @@ import (
 
 func main() {
 	var (
-		showToken = flag.Bool("print-token", false, "只打印当前 token 后退出")
-		port      = flag.Int("port", 0, "覆盖配置文件里的端口")
-		addr      = flag.String("addr", "0.0.0.0", "监听地址")
+		showToken    = flag.Bool("print-token", false, "只打印当前 token 后退出")
+		syncProjects = flag.Bool("sync-projects", false, "从 Cursor CLI 状态合并项目到白名单后退出")
+		addProject   = flag.String("add-project", "", "把指定目录加入白名单后退出（绝对路径或 ~/...）")
+		port         = flag.Int("port", 0, "覆盖配置文件里的端口")
+		addr         = flag.String("addr", "0.0.0.0", "监听地址")
 	)
 	flag.Parse()
 
@@ -31,6 +33,31 @@ func main() {
 	}
 	if *showToken {
 		fmt.Println(cfg.Token)
+		return
+	}
+	// 维护白名单：改完写盘即退出，运行中的服务需 kickstart 才会读到新配置；
+	// 若服务已开，更推荐手机点「同步」或打 POST /api/projects/sync（热更新内存）。
+	if *syncProjects {
+		added, err := cfg.syncProjectsFromCLI()
+		if err != nil {
+			log.Fatalf("同步项目失败: %v", err)
+		}
+		fmt.Printf("新增 %d 个项目，白名单共 %d 个\n", len(added), len(cfg.Projects))
+		for _, p := range added {
+			fmt.Printf("  + %s  %s\n", p.Name, p.Path)
+		}
+		return
+	}
+	if *addProject != "" {
+		proj, added, err := cfg.addProject("", *addProject)
+		if err != nil {
+			log.Fatalf("添加项目失败: %v", err)
+		}
+		if added {
+			fmt.Printf("已添加: %s  %s\n", proj.Name, proj.Path)
+		} else {
+			fmt.Printf("已在白名单: %s  %s\n", proj.Name, proj.Path)
+		}
 		return
 	}
 

@@ -68,6 +68,31 @@ struct APIClient {
         return wrapper.projects
     }
 
+    /// 从 Mac 上 Cursor CLI 状态合并新项目到白名单
+    func syncProjects() async throws -> (addedCount: Int, projects: [ProjectInfo]) {
+        struct Wrapper: Decodable {
+            let addedCount: Int
+            let projects: [ProjectInfo]
+        }
+        let wrapper: Wrapper = try await send("api/projects/sync", method: "POST")
+        return (wrapper.addedCount, wrapper.projects)
+    }
+
+    /// 按 Mac 绝对路径加入白名单
+    func addProject(path: String, name: String = "") async throws -> (added: Bool, projects: [ProjectInfo]) {
+        struct Body: Encodable {
+            let path: String
+            let name: String
+        }
+        struct Wrapper: Decodable {
+            let added: Bool
+            let projects: [ProjectInfo]
+        }
+        let body = try JSONEncoder().encode(Body(path: path, name: name))
+        let wrapper: Wrapper = try await send("api/projects", method: "POST", body: body)
+        return (wrapper.added, wrapper.projects)
+    }
+
     func tasks(limit: Int = 50) async throws -> [TaskInfo] {
         struct Wrapper: Decodable { let tasks: [TaskInfo] }
         // limit 走 queryItems，不能拼进 path

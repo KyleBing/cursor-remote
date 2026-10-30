@@ -71,6 +71,14 @@ func (t *Task) handleLine(line string) {
 		t.mu.Unlock()
 		t.emit(Event{Type: "assistant", Text: txt, Raw: raw})
 
+	case "thinking":
+		// 思考过程：正文在顶层 text 字段（不是 message.content）。
+		txt, _ := m["text"].(string)
+		if txt == "" && sub != "completed" {
+			return
+		}
+		t.emit(Event{Type: "thinking", Sub: sub, Text: txt, Raw: raw})
+
 	case "tool_call":
 		callID, _ := m["call_id"].(string)
 		tool, detail := describeTool(m["tool_call"])
@@ -149,6 +157,7 @@ func extractText(message any) string {
 
 // describeTool 从 tool_call 载荷里提取工具名与参数摘要。
 // 载荷形如 {"shellToolCall": {"args": {"command": "ls"}}}。
+// 对 edit/write/delete：只保留路径与增减行数，不把正文塞进 detail（省流量、方便 App 汇总）。
 func describeTool(v any) (tool, detail string) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -159,18 +168,98 @@ func describeTool(v any) (tool, detail string) {
 			continue
 		}
 		tool = strings.TrimSuffix(k, "ToolCall")
-		if vm, ok := val.(map[string]any); ok {
-			if a, ok := vm["args"]; ok {
-				detail = compactJSON(a)
-			} else {
+		vm, _ := val.(map[string]any)
+		args, _ := vm["args"].(map[string]any)
+		switch tool {
+		case "edit", "write", "delete":
+			detail = summarizeFileChange(tool, args, vm)
+		default:
+			if args != nil {
+				detail = compactJSON(args)
+			} else if vm != nil {
 				detail = compactJSON(vm)
+			} else {
+				detail = compactJSON(val)
 			}
-		} else {
-			detail = compactJSON(val)
 		}
 		break
 	}
 	return tool, detail
+}
+
+// summarizeFileChange 把改文件类工具压成 {path,add,del}，供详情页列文件列表。
+func summarizeFileChange(tool string, args, vm map[string]any) string {
+	out := map[string]any{"path": "", "add": 0, "del": 0}
+	if args != nil {
+		if p, ok := args["path"].(string); ok {
+			out["path"] = p
+		}
+	}
+	add, del := 0, 0
+	// 优先用 result 里的统计（若 CLI 提供）
+	if vm != nil {
+		if res, ok := vm["result"].(map[string]any); ok {
+			add = anyInt(res["linesAdded"], res["addedLines"], res["add"])
+			del = anyInt(res["linesRemoved"], res["removedLines"], res["del"])
+		}
+	}
+	if add == 0 && del == 0 && args != nil {
+		switch tool {
+		case "delete":
+			del = 1
+		case "write", "edit":
+			if s, ok := args["streamContent"].(string); ok {
+				add = countLines(s)
+			} else if s, ok := args["contents"].(string); ok {
+				add = countLines(s)
+			} else if s, ok := args["new_string"].(string); ok {
+				add = countLines(s)
+				if old, ok := args["old_string"].(string); ok {
+					del = countLines(old)
+				}
+			}
+		}
+	}
+	out["add"] = add
+	out["del"] = del
+	return compactJSON(out)
+}
+
+// anyInt 从候选字段里取第一个非零整数（JSON 数字常为 float64）。
+func anyInt(vals ...any) int {
+	for _, v := range vals {
+		switch n := v.(type) {
+		case float64:
+			if n != 0 {
+				return int(n)
+			}
+		case int:
+			if n != 0 {
+				return n
+			}
+		case int64:
+			if n != 0 {
+				return int(n)
+			}
+		case json.Number:
+			if i, err := n.Int64(); err == nil && i != 0 {
+				return int(i)
+			}
+		}
+	}
+	return 0
+}
+
+// countLines 按换行计行数；空串为 0，无换行的非空串计 1 行。
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if strings.HasSuffix(s, "\n") {
+		return n
+	}
+	return n + 1
 }
 
 // compactJSON 把任意值压成单行 JSON，超长截断。

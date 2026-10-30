@@ -165,7 +165,7 @@ launchctl kickstart -k "gui/$(id -u)/cn.kylebing.cursor-remote"
 | `port` | 默认 `8787` |
 | `token` | Bearer；空则启动时自动生成 |
 | `agentPath` | agent CLI 路径，可自动探测 |
-| `projects` | **项目白名单**（名 + 绝对路径）；首次可从 Cursor 状态推断 |
+| `projects` | **项目白名单**（名 + 绝对路径）；首次可从 Cursor 状态推断；之后可用 App「同步」、`POST /api/projects/sync`，或 `server/bin/cursor-remote -sync-projects` / `-add-project <路径>` |
 | `programs` | **可远程启停程序**（`app` / `launchagent`）；缺省含 Cursor、frp、防睡眠 |
 | `defaultApproval` | `auto-review`（默认）/ `default` / `force` |
 | `allowForce` | 是否允许手机选「全部放行」，默认 `false` |
@@ -194,6 +194,9 @@ launchctl kickstart -k "gui/$(id -u)/cn.kylebing.cursor-remote"
 | --- | --- | --- |
 | GET | `/api/health` | 服务与 CLI 状态 |
 | GET | `/api/projects` | 白名单项目 |
+| POST | `/api/projects/sync` | 从 Cursor CLI 状态合并新项目 |
+| POST | `/api/projects` | 手动添加 `{path, name?}` |
+| DELETE | `/api/projects` | 移除 `{project\|path\|name}` |
 | GET | `/api/tasks?limit=50` | 任务列表 |
 | POST | `/api/tasks` | 新建 `{project,prompt,mode,model,approval}` |
 | GET | `/api/tasks/{id}` | 详情 + 事件 |
