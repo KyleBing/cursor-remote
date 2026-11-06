@@ -7,6 +7,50 @@ extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
+// MARK: - iPad / 宽屏适配
+
+extension View {
+    /// 宽屏下限制内容最大宽度并居中，避免 Form / 对话拉得过宽难读
+    func adaptiveReadableWidth(_ maxWidth: CGFloat = 720) -> some View {
+        modifier(AdaptiveReadableWidthModifier(maxWidth: maxWidth))
+    }
+
+    /// iPad 弹层给一个更舒服的理想尺寸
+    func adaptiveSheetIdealSize(width: CGFloat = 560, height: CGFloat = 680) -> some View {
+        modifier(AdaptiveSheetIdealSizeModifier(width: width, height: height))
+    }
+}
+
+private struct AdaptiveReadableWidthModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let maxWidth: CGFloat
+
+    func body(content: Content) -> some View {
+        // regular：iPad 全屏 / 大分屏；compact：iPhone 或窄分屏，保持全宽
+        if sizeClass == .regular {
+            content
+                .frame(maxWidth: maxWidth)
+                .frame(maxWidth: .infinity)
+        } else {
+            content
+        }
+    }
+}
+
+private struct AdaptiveSheetIdealSizeModifier: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    let width: CGFloat
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        if sizeClass == .regular {
+            content.frame(minWidth: width, idealWidth: width, minHeight: height, idealHeight: height)
+        } else {
+            content
+        }
+    }
+}
+
 /// 把服务端的状态字符串映射成颜色
 func statusColor(_ status: String) -> Color {
     switch status {

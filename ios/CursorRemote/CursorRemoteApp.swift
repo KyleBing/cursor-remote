@@ -40,8 +40,17 @@ struct RootView: View {
     }
 }
 
-/// 主界面：项目 / 任务 / 本机 / 设置
+/// 主分区：项目 / 任务 / 本机 / 设置
+enum MainSection: Hashable {
+    case projects, tasks, programs, settings
+}
+
+/// 主界面：iPhone 底栏 Tab；iPad 左侧边栏，更好用宽屏
 struct MainTabView: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    // iOS List selection 必须是 Optional
+    @State private var section: MainSection? = .projects
+
     init() {
         // 底部 Tab 文字略放大，默认偏小
         let font = UIFont.systemFont(ofSize: 11, weight: .medium)
@@ -50,17 +59,68 @@ struct MainTabView: View {
         UITabBarItem.appearance().setTitleTextAttributes(attrs, for: .selected)
     }
 
+    private var currentSection: MainSection { section ?? .projects }
+
     var body: some View {
-        TabView {
+        // regular 宽屏用侧边栏；窄屏（含 iPad 分屏）回退到底栏
+        if sizeClass == .regular {
+            ipadSidebar
+        } else {
+            iphoneTabs
+        }
+    }
+
+    private var iphoneTabs: some View {
+        TabView(selection: Binding(
+            get: { currentSection },
+            set: { section = $0 }
+        )) {
             ProjectsView()
                 .tabItem { Label("项目", systemImage: "folder") }
+                .tag(MainSection.projects)
             TasksView()
                 .tabItem { Label("任务", systemImage: "list.bullet.rectangle") }
+                .tag(MainSection.tasks)
             ProgramsView()
                 .tabItem { Label("本机", systemImage: "laptopcomputer") }
+                .tag(MainSection.programs)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
+                .tag(MainSection.settings)
         }
+    }
+
+    private var ipadSidebar: some View {
+        NavigationSplitView {
+            List(selection: $section) {
+                Section {
+                    Label("项目", systemImage: "folder")
+                        .tag(MainSection.projects)
+                    Label("任务", systemImage: "list.bullet.rectangle")
+                        .tag(MainSection.tasks)
+                    Label("本机", systemImage: "laptopcomputer")
+                        .tag(MainSection.programs)
+                    Label("设置", systemImage: "gearshape")
+                        .tag(MainSection.settings)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationTitle("远程 Cursor")
+            .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
+        } detail: {
+            // 各页自带 NavigationStack，放在 detail 列即可
+            switch currentSection {
+            case .projects:
+                ProjectsView()
+            case .tasks:
+                TasksView()
+            case .programs:
+                ProgramsView()
+            case .settings:
+                SettingsView()
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 }
 
@@ -119,6 +179,7 @@ struct SetupView: View {
                     }
                 }
             }
+            .adaptiveReadableWidth(560)
             .navigationTitle("远程 Cursor")
         }
     }

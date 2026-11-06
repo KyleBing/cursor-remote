@@ -3,8 +3,10 @@ import SwiftUI
 /// 项目列表：点项目直接发起对话
 struct ProjectsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var newTaskProject: ProjectInfo?
     @State private var path: [TaskInfo] = []
+    @State private var selectedTask: TaskInfo?
     @State private var syncing = false
     @State private var syncMessage: String?
     @State private var filter = ""
@@ -18,93 +20,218 @@ struct ProjectsView: View {
         }
     }
 
+    private var isRegular: Bool { sizeClass == .regular }
+
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                if let health = model.health {
-                    Section { ServerStatusRow(health: health) }
-                } else if model.isLoading {
-                    // 健康状态还没回来时占位，避免这一节突然出现把列表顶下去
-                    Section {
-                        ServerStatusRow(health: .placeholder)
-                            .redacted(reason: .placeholder)
+        // iPad：列表 + 任务详情分栏；手机：单栏导航栈
+        if isRegular {
+            NavigationSplitView {
+                projectRoot(showsDetailPush: false)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 420)
+            } detail: {
+                if let selectedTask {
+                    NavigationStack {
+                        TaskDetailView(task: selectedTask)
+                            .id(selectedTask.id)
                     }
+                } else {
+                    ContentUnavailableView(
+                        "选择项目发起对话",
+                        systemImage: "folder.badge.plus",
+                        description: Text("左侧点项目即可下发指令；创建后详情会显示在这里。")
+                    )
+                }
+            }
+        } else {
+            NavigationStack(path: $path) {
+                projectRoot(showsDetailPush: true)
+                    .navigationDestination(for: TaskInfo.self) { task in
+                        TaskDetailView(task: task)
+                    }
+            }
+        }
+    }
+
+    /// 项目列表根（手机 / iPad 共用）
+    @ViewBuilder
+    private func projectRoot(showsDetailPush: Bool) -> some View {
+        Group {
+            if isRegular {
+                // 宽屏用双列卡片，更好利用横向空间
+                projectScrollGrid
+            } else {
+                projectPhoneList
+            }
+        }
+        .navigationTitle("远程 Cursor")
+        .searchable(text: $filter, prompt: "搜索项目")
+        .refreshable { await model.refresh() }
+        .task {
+            if model.projects.isEmpty {
+                await model.refresh()
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await syncFromCLI() }
+                } label: {
+                    if syncing {
+                        ProgressView()
+                    } else {
+                        Label("同步", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(syncing || model.client == nil)
+            }
+        }
+        .sheet(item: $newTaskProject) { project in
+            NewTaskView(project: project) { created in
+                newTaskProject = nil
+                if showsDetailPush {
+                    path.append(created)
+                } else {
+                    selectedTask = created
+                }
+            }
+            .adaptiveSheetIdealSize()
+        }
+    }
+
+    private var projectPhoneList: some View {
+        List {
+            statusSections
+            Section("项目") {
+                projectRows
+            }
+        }
+    }
+
+    private var projectScrollGrid: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let health = model.health {
+                    ServerStatusRow(health: health)
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                } else if model.isLoading {
+                    ServerStatusRow(health: .placeholder)
+                        .redacted(reason: .placeholder)
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
                 if let error = model.lastError {
-                    Section {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                    }
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
 
                 if let syncMessage {
-                    Section {
-                        Text(syncMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(syncMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
-                Section("项目") {
-                    if model.projects.isEmpty {
-                        if model.isLoading {
-                            // 骨架占位：切页瞬间不再闪「没有可用项目」
-                            ForEach(0..<3, id: \.self) { _ in
-                                ProjectRow(project: .placeholder)
-                                    .redacted(reason: .placeholder)
-                            }
-                        } else {
-                            Text("没有可用项目。可点右上角同步，从 Mac 上 Cursor CLI 最近用过的目录导入。")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if filteredProjects.isEmpty {
-                        Text("没有匹配「\(filter.trimmed)」的项目")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(filteredProjects) { project in
-                        Button {
-                            newTaskProject = project
-                        } label: {
-                            ProjectRow(project: project)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .navigationTitle("远程 Cursor")
-            .searchable(text: $filter, prompt: "搜索项目")
-            .refreshable { await model.refresh() }
-            // 列表为空时补拉一次，避免只靠手动下拉才有内容
-            .task {
+                Text("项目")
+                    .font(.title3.weight(.semibold))
+
                 if model.projects.isEmpty {
-                    await model.refresh()
-                }
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await syncFromCLI() }
-                    } label: {
-                        if syncing {
-                            ProgressView()
-                        } else {
-                            Label("同步", systemImage: "arrow.triangle.2.circlepath")
+                    emptyProjectsView
+                } else if filteredProjects.isEmpty {
+                    Text("没有匹配「\(filter.trimmed)」的项目")
+                        .foregroundStyle(.secondary)
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 260), spacing: 12)],
+                        spacing: 12
+                    ) {
+                        ForEach(filteredProjects) { project in
+                            Button {
+                                newTaskProject = project
+                            } label: {
+                                ProjectRow(project: project)
+                                    .padding(14)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .disabled(syncing || model.client == nil)
                 }
             }
-            .navigationDestination(for: TaskInfo.self) { task in
-                TaskDetailView(task: task)
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private var statusSections: some View {
+        if let health = model.health {
+            Section { ServerStatusRow(health: health) }
+        } else if model.isLoading {
+            Section {
+                ServerStatusRow(health: .placeholder)
+                    .redacted(reason: .placeholder)
             }
-            .sheet(item: $newTaskProject) { project in
-                NewTaskView(project: project) { created in
-                    newTaskProject = nil
-                    path.append(created)
+        }
+
+        if let error = model.lastError {
+            Section {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+
+        if let syncMessage {
+            Section {
+                Text(syncMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var projectRows: some View {
+        if model.projects.isEmpty {
+            if model.isLoading {
+                ForEach(0..<3, id: \.self) { _ in
+                    ProjectRow(project: .placeholder)
+                        .redacted(reason: .placeholder)
                 }
+            } else {
+                Text("没有可用项目。可点右上角同步，从 Mac 上 Cursor CLI 最近用过的目录导入。")
+                    .foregroundStyle(.secondary)
             }
+        } else if filteredProjects.isEmpty {
+            Text("没有匹配「\(filter.trimmed)」的项目")
+                .foregroundStyle(.secondary)
+        }
+        ForEach(filteredProjects) { project in
+            Button {
+                newTaskProject = project
+            } label: {
+                ProjectRow(project: project)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var emptyProjectsView: some View {
+        if model.isLoading {
+            ForEach(0..<3, id: \.self) { _ in
+                ProjectRow(project: .placeholder)
+                    .redacted(reason: .placeholder)
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        } else {
+            Text("没有可用项目。可点右上角同步，从 Mac 上 Cursor CLI 最近用过的目录导入。")
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -124,43 +251,90 @@ struct ProjectsView: View {
 /// 任务历史列表
 struct TasksView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var path: [TaskInfo] = []
+    // 用 id 选中，避免刷新后 TaskInfo 字段变化导致选中丢失
+    @State private var selectedTaskID: String?
+
+    private var isRegular: Bool { sizeClass == .regular }
+
+    private var selectedTask: TaskInfo? {
+        guard let selectedTaskID else { return nil }
+        return model.tasks.first { $0.id == selectedTaskID }
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                if model.tasks.isEmpty {
-                    if model.isLoading {
-                        // 骨架占位，避免首屏先闪一下「还没有任务」
-                        ForEach(0..<3, id: \.self) { _ in
-                            TaskRow(task: .placeholder)
-                                .redacted(reason: .placeholder)
-                        }
-                    } else {
-                        Text("还没有任务")
-                            .foregroundStyle(.secondary)
+        if isRegular {
+            // iPad：左列表右详情，少一次整页跳转
+            NavigationSplitView {
+                taskList(selectionEnabled: true)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 360, max: 440)
+            } detail: {
+                if let selectedTask {
+                    NavigationStack {
+                        TaskDetailView(task: selectedTask)
+                            // 仅切换任务时重建会话，列表刷新不打断 SSE
+                            .id(selectedTask.id)
                     }
+                } else {
+                    ContentUnavailableView(
+                        "选择任务",
+                        systemImage: "list.bullet.rectangle",
+                        description: Text("从左侧选一条任务查看流式输出与续聊。")
+                    )
                 }
-                ForEach(model.tasks) { task in
+            }
+        } else {
+            NavigationStack(path: $path) {
+                taskList(selectionEnabled: false)
+                    .navigationDestination(for: TaskInfo.self) { task in
+                        TaskDetailView(task: task)
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func taskList(selectionEnabled: Bool) -> some View {
+        List(selection: selectionEnabled ? $selectedTaskID : nil) {
+            if model.tasks.isEmpty {
+                if model.isLoading {
+                    ForEach(0..<3, id: \.self) { _ in
+                        TaskRow(task: .placeholder)
+                            .redacted(reason: .placeholder)
+                    }
+                } else {
+                    Text("还没有任务")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(model.tasks) { task in
+                if selectionEnabled {
+                    TaskRow(task: task)
+                        .tag(task.id)
+                } else {
                     NavigationLink(value: task) {
                         TaskRow(task: task)
                     }
                 }
             }
-            .navigationTitle("任务")
-            .refreshable { await model.refreshTasks() }
-            .task { await model.refreshTasks() }
-            .navigationDestination(for: TaskInfo.self) { task in
-                TaskDetailView(task: task)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await model.refreshTasks() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
+        }
+        .navigationTitle("任务")
+        .refreshable { await model.refreshTasks() }
+        .task { await model.refreshTasks() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await model.refreshTasks() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
+            }
+        }
+        .onChange(of: model.tasks.map(\.id)) { _, ids in
+            guard selectionEnabled, let selectedTaskID else { return }
+            if !ids.contains(selectedTaskID) {
+                self.selectedTaskID = nil
             }
         }
     }

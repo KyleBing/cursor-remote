@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 本机页分区，用于顶部 4×2 格子导航
-private enum MacSection: String, CaseIterable, Identifiable {
+private enum MacSection: String, CaseIterable, Identifiable, Hashable {
     // 概览单独；内存+硬盘；电池+显示；其余各自一格；终端单独
     case overview, storage, power, network, bluetooth, apps, terminal
 
@@ -54,10 +54,14 @@ private struct ShellHistoryEntry: Identifiable {
 /// 本机：系统状态 + 受管程序启停 + 运行中应用
 struct ProgramsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var busyID: String?
     @State private var showOpenSheet = false
     @State private var actionError: String?
-    @State private var activeSection: MacSection = .overview
+    // iOS List selection 必须 Optional；展示时用 currentSection 兜底
+    @State private var activeSection: MacSection? = .overview
+
+    private var currentSection: MacSection { activeSection ?? .overview }
 
     // 亮度 / 音量本地滑杆值（拖动时先更新 UI，松手或停顿后再请求）
     @State private var brightnessSlider: Double = 50
@@ -75,19 +79,28 @@ struct ProgramsView: View {
     @State private var shellHistory: [ShellHistoryEntry] = []
     @FocusState private var shellInputFocused: Bool
 
+    private var isRegular: Bool { sizeClass == .regular }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                sectionTabBar
-                Divider()
-                // 终端用独立布局：历史上滚 + 底部输入，避免键盘挡住输出
-                if activeSection == .terminal {
-                    terminalChatView
+            Group {
+                // iPad：左侧分区列表 + 右侧内容；手机：顶部格子导航
+                if isRegular {
+                    HStack(spacing: 0) {
+                        sectionSidebar
+                            .frame(width: 200)
+                        Divider()
+                        sectionContent
+                    }
                 } else {
-                    pageList
+                    VStack(spacing: 0) {
+                        sectionTabBar
+                        Divider()
+                        sectionContent
+                    }
                 }
             }
-            .navigationTitle("本机")
+            .navigationTitle(isRegular ? currentSection.title : "本机")
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 if model.systemInfo == nil {
@@ -125,8 +138,32 @@ struct ProgramsView: View {
                         Task { await reload() }
                     }
                 }
+                .adaptiveSheetIdealSize(width: 520, height: 640)
             }
         }
+    }
+
+    /// 当前分区内容（终端 / 列表）
+    @ViewBuilder
+    private var sectionContent: some View {
+        if currentSection == .terminal {
+            terminalChatView
+        } else {
+            pageList
+                .adaptiveReadableWidth(820)
+        }
+    }
+
+    // MARK: - iPad 左侧分区列表
+
+    private var sectionSidebar: some View {
+        List(selection: $activeSection) {
+            ForEach(MacSection.allCases) { section in
+                Label(section.title, systemImage: section.icon)
+                    .tag(section)
+            }
+        }
+        .listStyle(.sidebar)
     }
 
     // MARK: - 顶部分区格子（4 列，点击切换，无横向滚动）
@@ -152,11 +189,11 @@ struct ProgramsView: View {
                     .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(activeSection == section
+                            .fill(currentSection == section
                                 ? Color.accentColor.opacity(0.16)
                                 : Color(.tertiarySystemFill))
                     )
-                    .foregroundStyle(activeSection == section ? Color.accentColor : .secondary)
+                    .foregroundStyle(currentSection == section ? Color.accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -181,14 +218,14 @@ struct ProgramsView: View {
         .listStyle(.insetGrouped)
         .refreshable { await reload() }
         // 切换分区时带一点过渡，避免内容硬切
-        .animation(.easeInOut(duration: 0.15), value: activeSection)
+        .animation(.easeInOut(duration: 0.15), value: currentSection)
     }
 
     // MARK: - 各分区页面内容
 
     @ViewBuilder
     private var pageContent: some View {
-        switch activeSection {
+        switch currentSection {
         case .overview:
             overviewPage
         case .storage:
@@ -235,6 +272,8 @@ struct ProgramsView: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
+                    // 终端输出适当限宽，横屏也不至于一行拉满整屏
+                    .adaptiveReadableWidth(960)
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .onChange(of: shellHistory.count) { _, _ in
@@ -250,6 +289,7 @@ struct ProgramsView: View {
 
             Divider()
             terminalInputBar
+                .adaptiveReadableWidth(960)
         }
         .background(Color(.systemGroupedBackground))
     }

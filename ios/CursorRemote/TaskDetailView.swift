@@ -38,6 +38,8 @@ struct TaskDetailView: View {
             }
             .padding()
             .padding(.bottom, 8)
+            // iPad 上限制行宽，长文/markdown 更好读
+            .adaptiveReadableWidth(860)
         }
         // 内容增长时始终贴住底部，符合看日志的习惯
         .defaultScrollAnchor(.bottom)
@@ -159,6 +161,7 @@ struct TaskDetailView: View {
             }
         }
         .background(.bar)
+        .adaptiveReadableWidth(860)
     }
 
     /// 发送后续指令

@@ -91,6 +91,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .adaptiveReadableWidth(640)
             .navigationTitle("设置")
         }
     }
