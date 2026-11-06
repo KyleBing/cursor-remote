@@ -2,8 +2,8 @@ import SwiftUI
 
 /// 本机页分区，用于顶部 4×2 格子导航
 private enum MacSection: String, CaseIterable, Identifiable {
-    // 概览单独；内存+硬盘；电池+显示；其余各自一格
-    case overview, storage, power, network, bluetooth, apps
+    // 概览单独；内存+硬盘；电池+显示；其余各自一格；终端单独
+    case overview, storage, power, network, bluetooth, apps, terminal
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ private enum MacSection: String, CaseIterable, Identifiable {
         case .network: return "网络"
         case .bluetooth: return "蓝牙"
         case .apps: return "应用"
+        case .terminal: return "终端"
         }
     }
 
@@ -26,7 +27,27 @@ private enum MacSection: String, CaseIterable, Identifiable {
         case .network: return "wifi"
         case .bluetooth: return "wave.3.right"
         case .apps: return "app.badge"
+        case .terminal: return "terminal"
         }
+    }
+}
+
+/// 终端历史里的一条：命令 + 输出（或执行中 / 错误）
+private struct ShellHistoryEntry: Identifiable {
+    let id: UUID
+    let command: String
+    let cwd: String
+    var running: Bool
+    var result: ShellExecResult?
+    var error: String?
+
+    init(command: String, cwd: String) {
+        self.id = UUID()
+        self.command = command
+        self.cwd = cwd
+        self.running = true
+        self.result = nil
+        self.error = nil
     }
 }
 
@@ -47,12 +68,24 @@ struct ProgramsView: View {
     @State private var volumeTask: Task<Void, Never>?
     @State private var controlBusy = false
 
+    // 终端：历史流 + 底部输入
+    @State private var shellCwd = "~"
+    @State private var shellCommand = ""
+    @State private var shellRunning = false
+    @State private var shellHistory: [ShellHistoryEntry] = []
+    @FocusState private var shellInputFocused: Bool
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 sectionTabBar
                 Divider()
-                pageList
+                // 终端用独立布局：历史上滚 + 底部输入，避免键盘挡住输出
+                if activeSection == .terminal {
+                    terminalChatView
+                } else {
+                    pageList
+                }
             }
             .navigationTitle("本机")
             .navigationBarTitleDisplayMode(.inline)
@@ -173,6 +206,218 @@ struct ProgramsView: View {
         case .apps:
             programsPage
             runningPage
+        case .terminal:
+            EmptyView()
+        }
+    }
+
+    // MARK: - 终端（历史流 + 底部输入）
+
+    private var terminalChatView: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        if shellHistory.isEmpty {
+                            Text("输入命令后回车执行，结果会按历史往上滚。")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 8)
+                        }
+                        ForEach(shellHistory) { entry in
+                            shellHistoryBlock(entry)
+                                .id(entry.id)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id("shell-bottom")
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: shellHistory.count) { _, _ in
+                    scrollShellToBottom(proxy)
+                }
+                .onChange(of: shellHistory.last?.running) { _, _ in
+                    scrollShellToBottom(proxy)
+                }
+                .onChange(of: shellInputFocused) { _, focused in
+                    if focused { scrollShellToBottom(proxy) }
+                }
+            }
+
+            Divider()
+            terminalInputBar
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    /// 一条历史：提示符命令 + 输出
+    @ViewBuilder
+    private func shellHistoryBlock(_ entry: ShellHistoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // 提示符行
+            HStack(alignment: .top, spacing: 6) {
+                Text(shortCwd(entry.cwd))
+                    .foregroundStyle(.secondary)
+                Text("$")
+                    .foregroundStyle(Color.accentColor)
+                Text(entry.command)
+                    .foregroundStyle(.primary)
+            }
+            .font(.footnote.monospaced())
+            .textSelection(.enabled)
+
+            if entry.running {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("执行中…")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption.monospaced())
+            } else if let error = entry.error {
+                Text(error)
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            } else if let result = entry.result {
+                let output = shellOutputText(result)
+                if output.isEmpty {
+                    Text("(无输出)")
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(output)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                HStack(spacing: 8) {
+                    Text(result.timedOut ? "超时" : "exit \(result.exitCode)")
+                        .foregroundStyle(result.exitCode == 0 && !result.timedOut ? Color.secondary : Color.red)
+                    Text("·")
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                    Text("\(result.durationMs) ms")
+                        .foregroundStyle(Color.secondary.opacity(0.6))
+                    if result.truncated {
+                        Text("· 已截断")
+                            .foregroundStyle(Color.orange)
+                    }
+                }
+                .font(.caption2.monospaced())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 底部：cwd + 命令输入，贴键盘上方
+    private var terminalInputBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("cwd")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextField("~", text: $shellCwd)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.caption.monospaced())
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                Text("$")
+                    .font(.body.monospaced().weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.bottom, 8)
+                TextField("命令", text: $shellCommand, axis: .vertical)
+                    .lineLimit(1...5)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.body.monospaced())
+                    .focused($shellInputFocused)
+                    .onSubmit { Task { await runShell() } }
+                Button {
+                    Task { await runShell() }
+                } label: {
+                    if shellRunning {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
+                }
+                .disabled(shellRunning || shellCommand.trimmed.isEmpty || model.client == nil)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func scrollShellToBottom(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo("shell-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    /// 提示符里的短路径
+    private func shortCwd(_ path: String) -> String {
+        if path == "~" || path.hasSuffix("/Users/") { return "~" }
+        if let home = ProcessInfo.processInfo.environment["HOME"], path.hasPrefix(home) {
+            let rest = String(path.dropFirst(home.count))
+            return rest.isEmpty ? "~" : "~\(rest)"
+        }
+        // 手机端没有 Mac HOME，只显示末两级
+        let parts = path.split(separator: "/").map(String.init)
+        if parts.count >= 2 {
+            return parts.suffix(2).joined(separator: "/")
+        }
+        return path
+    }
+
+    /// 合并 stdout / stderr 方便一屏看
+    private func shellOutputText(_ result: ShellExecResult) -> String {
+        var parts: [String] = []
+        if !result.stdout.isEmpty { parts.append(result.stdout) }
+        if !result.stderr.isEmpty {
+            parts.append(parts.isEmpty ? result.stderr : "── stderr ──\n\(result.stderr)")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    /// 调服务端执行命令，追加到历史
+    private func runShell() async {
+        guard let client = model.client else { return }
+        let command = shellCommand.trimmed
+        guard !command.isEmpty, !shellRunning else { return }
+        let cwd = shellCwd.trimmed.isEmpty ? "~" : shellCwd.trimmed
+        let entry = ShellHistoryEntry(command: command, cwd: cwd)
+        let entryID = entry.id
+        shellHistory.append(entry)
+        shellCommand = ""
+        shellRunning = true
+        actionError = nil
+        defer { shellRunning = false }
+        do {
+            let result = try await client.execShell(command: command, cwd: cwd)
+            if let idx = shellHistory.firstIndex(where: { $0.id == entryID }) {
+                shellHistory[idx].running = false
+                shellHistory[idx].result = result
+            }
+            // 成功后用服务端解析后的绝对路径回填 cwd，方便下一跳
+            if !result.cwd.isEmpty {
+                shellCwd = result.cwd
+            }
+        } catch {
+            if let idx = shellHistory.firstIndex(where: { $0.id == entryID }) {
+                shellHistory[idx].running = false
+                shellHistory[idx].error = error.localizedDescription
+            }
         }
     }
 

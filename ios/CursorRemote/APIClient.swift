@@ -213,6 +213,29 @@ struct APIClient {
         let _: Wrapper = try await send("api/apps/quit", method: "POST", body: body)
     }
 
+    /// 本机一次性执行 shell（超时略大于服务端上限 120s）
+    func execShell(command: String, cwd: String, timeoutSec: Int = 30) async throws -> ShellExecResult {
+        struct Body: Encodable {
+            let command: String
+            let cwd: String
+            let timeoutSec: Int
+        }
+        let body = try JSONEncoder().encode(Body(command: command, cwd: cwd, timeoutSec: timeoutSec))
+        var req = request("api/shell/exec", method: "POST", body: body)
+        req.timeoutInterval = 130
+        let (data, response) = try await Self.session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError(error: "无响应")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if let apiErr = try? JSONDecoder().decode(APIError.self, from: data) {
+                throw apiErr
+            }
+            throw APIError(error: "HTTP \(http.statusCode)")
+        }
+        return try JSONDecoder().decode(ShellExecResult.self, from: data)
+    }
+
     // MARK: - SSE
 
     /// 订阅任务事件流；after 为已收到的最后一个 seq，用于断线续传。

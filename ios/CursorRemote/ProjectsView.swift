@@ -7,6 +7,16 @@ struct ProjectsView: View {
     @State private var path: [TaskInfo] = []
     @State private var syncing = false
     @State private var syncMessage: String?
+    @State private var filter = ""
+
+    // 按名称 / 路径本地过滤
+    private var filteredProjects: [ProjectInfo] {
+        let q = filter.trimmed.lowercased()
+        guard !q.isEmpty else { return model.projects }
+        return model.projects.filter {
+            $0.name.lowercased().contains(q) || $0.path.lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -49,8 +59,11 @@ struct ProjectsView: View {
                             Text("没有可用项目。可点右上角同步，从 Mac 上 Cursor CLI 最近用过的目录导入。")
                                 .foregroundStyle(.secondary)
                         }
+                    } else if filteredProjects.isEmpty {
+                        Text("没有匹配「\(filter.trimmed)」的项目")
+                            .foregroundStyle(.secondary)
                     }
-                    ForEach(model.projects) { project in
+                    ForEach(filteredProjects) { project in
                         Button {
                             newTaskProject = project
                         } label: {
@@ -61,6 +74,7 @@ struct ProjectsView: View {
                 }
             }
             .navigationTitle("远程 Cursor")
+            .searchable(text: $filter, prompt: "搜索项目")
             .refreshable { await model.refresh() }
             // 列表为空时补拉一次，避免只靠手动下拉才有内容
             .task {

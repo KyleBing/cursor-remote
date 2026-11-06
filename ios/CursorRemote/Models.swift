@@ -307,6 +307,18 @@ struct AvailableApp: Codable, Identifiable, Hashable {
     var id: String { path }
 }
 
+/// 本机一次性 shell 执行结果
+struct ShellExecResult: Codable {
+    let command: String
+    let cwd: String
+    let exitCode: Int
+    let stdout: String
+    let stderr: String
+    let durationMs: Int64
+    let timedOut: Bool
+    let truncated: Bool
+}
+
 /// 接口错误
 struct APIError: LocalizedError, Decodable {
     let error: String

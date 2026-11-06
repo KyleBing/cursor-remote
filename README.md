@@ -220,6 +220,7 @@ SSE：`event: task` / `event` / `done`，约 15s 心跳注释行。
 | GET | `/api/system` | 硬件/内存/磁盘/电池/亮度音量/网络/蓝牙/负载 |
 | POST | `/api/system/brightness` | `{percent:0-100}` |
 | POST | `/api/system/volume` | `{percent:0-100, muted?:bool}` |
+| POST | `/api/shell/exec` | 一次性命令 `{command, cwd?, timeoutSec?}`（非交互） |
 
 亮度调节依赖同目录 `server/displayctl.py`（经 DisplayServices）；`run-server.sh` / `install-launchagent.sh` 会拷到 `server/bin/`。
 

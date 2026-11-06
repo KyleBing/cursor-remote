@@ -22,6 +22,7 @@ type Server struct {
 	healthMu   sync.Mutex
 	healthAt   time.Time
 	healthBody map[string]any
+	shellMu    sync.Mutex // 同时只允许一个 shell 命令
 }
 
 // NewServer 构造 HTTP 服务。
@@ -54,6 +55,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/system", s.auth(s.handleSystemInfo))
 	mux.HandleFunc("POST /api/system/brightness", s.auth(s.handleSetBrightness))
 	mux.HandleFunc("POST /api/system/volume", s.auth(s.handleSetVolume))
+	// 本机一次性命令（非交互 PTY）
+	mux.HandleFunc("POST /api/shell/exec", s.auth(s.handleShellExec))
 	// 根路径给个简单说明页，方便用浏览器自测。
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -551,6 +554,27 @@ func (s *Server) handleOpenApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "opened"})
+}
+
+// handleShellExec 一次性执行 shell 命令，body: {command, cwd?, timeoutSec?}。
+func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
+	var req ShellExecRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	if !s.shellMu.TryLock() {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "已有命令在执行，请稍后再试"})
+		return
+	}
+	defer s.shellMu.Unlock()
+
+	result, err := execShell(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleQuitApp 退出正在运行的前台应用。

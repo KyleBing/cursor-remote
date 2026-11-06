@@ -15,6 +15,8 @@
 
 ### 新增
 
+- **项目列表搜索**：首页支持按名称 / 路径本地筛选。
+- **本机命令终端**：`POST /api/shell/exec` 一次性用 zsh 执行命令（任意 cwd、超时与输出截断、单并发）；App「本机」页新增「终端」分区。
 - **项目白名单可同步/增删**：`POST /api/projects/sync` 从 Cursor CLI 状态合并新目录；`POST/DELETE /api/projects` 按路径增删；CLI 支持 `-sync-projects` / `-add-project`；App 项目页右上角「同步」一键导入。不必再手改 `config.json` 并重启。
 - **本机程序管理**：服务端新增 `/api/programs` 与 `/api/apps/*`，可查看正在运行的前台应用，并启停白名单程序（默认 Cursor / frp 隧道 / 防睡眠）；App 增加「本机」页，支持开关、关闭与从 Applications 打开。
 - **本机系统信息**：`GET /api/system` 汇总硬件、内存/交换、磁盘、电池、亮度、音量、网络（含 Wi‑Fi 信道与信号）、蓝牙已连接/已配对设备、负载与开机时长；运行中程序附带 RSS 内存占用。
